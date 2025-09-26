@@ -22,8 +22,21 @@ final class ChoresViewModel: ObservableObject {
         chores.removeAll { $0.id == chore.id }
     }
 
+    func remove(ids choreIDs: Set<UUID>) {
+        guard !choreIDs.isEmpty else { return }
+        chores.removeAll { choreIDs.contains($0.id) }
+    }
+
     func update(_ chore: Chore) {
         guard let index = chores.firstIndex(where: { $0.id == chore.id }) else { return }
         chores[index] = chore
+    }
+
+    func assign(ids: Set<UUID>, to assignee: String) {
+        for index in chores.indices {
+            if ids.contains(chores[index].id) {
+                chores[index].assignedTo = assignee
+            }
+        }
     }
 }

@@ -39,3 +39,9 @@ private extension PlaceholderView {
             .zIndex(1)
     }
 }
+
+#if DEBUG
+#Preview("Family Rewards") {
+    PlaceholderView(title: "Rewards")
+}
+#endif

@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ChoreRow: View {
     let chore: Chore
+    var isSelecting: Bool = false
+    var isSelected: Bool = false
     @Environment(\.colorScheme) private var colorScheme
 
     private var iconColor: Color {
@@ -15,17 +17,15 @@ struct ChoreRow: View {
         return palette[index]
     }
 
-    var body: some View {
-        let bgTint = Color.blue.opacity(colorScheme == .dark ? 0.14 : 0.08)
+    private var backgroundTint: Color {
+        let base = Color.blue.opacity(colorScheme == .dark ? 0.14 : 0.08)
+        guard isSelecting, isSelected else { return base }
+        return Color.accentColor.opacity(colorScheme == .dark ? 0.3 : 0.2)
+    }
 
+    var body: some View {
         HStack(spacing: 14) {
-            Circle()
-                .fill(iconColor.opacity(0.3))
-                .frame(width: 46, height: 46)
-                .overlay(
-                    Text(chore.icon.isEmpty ? "🧩" : chore.icon)
-                        .font(.title2)
-                )
+            leadingContent
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(chore.name)
@@ -41,12 +41,13 @@ struct ChoreRow: View {
 
             Image(systemName: "chevron.right")
                 .foregroundStyle(.secondary)
+                .opacity(isSelecting ? 0 : 1)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(bgTint)
+                .fill(backgroundTint)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -56,6 +57,24 @@ struct ChoreRow: View {
         #if os(iOS)
         .hoverEffect(.lift)
         #endif
+    }
+
+    @ViewBuilder
+    private var leadingContent: some View {
+        if isSelecting {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 24, weight: .semibold))
+                .frame(width: 46, height: 46)
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+        } else {
+            Circle()
+                .fill(iconColor.opacity(0.3))
+                .frame(width: 46, height: 46)
+                .overlay(
+                    Text(chore.icon.isEmpty ? "🧩" : chore.icon)
+                        .font(.title2)
+                )
+        }
     }
 
     private var metaLine: some View {
@@ -107,10 +126,13 @@ struct ChoreRow: View {
 }
 
 #if DEBUG
-#Preview("Chore Row") {
+#Preview("Chore Row", traits: .sizeThatFitsLayout) {
     ChoreRow(chore: .preview)
         .padding()
-        .previewLayout(.sizeThatFits)
+}
+
+#Preview("Chore Row Selecting", traits: .sizeThatFitsLayout) {
+    ChoreRow(chore: .preview, isSelecting: true, isSelected: true)
+        .padding()
 }
 #endif
-

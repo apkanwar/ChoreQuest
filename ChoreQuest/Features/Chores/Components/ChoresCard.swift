@@ -4,6 +4,9 @@ struct ChoresCard: View {
     let chores: [Chore]
     var onAdd: () -> Void
     var onEdit: (Chore) -> Void
+    var isSelectingForDeletion: Bool = false
+    var selectedChoreIDs: Set<UUID> = []
+    var onToggleSelection: (Chore) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -26,12 +29,25 @@ struct ChoresCard: View {
             .padding(.bottom, 4)
 
             ForEach(chores) { chore in
-                Button {
-                    onEdit(chore)
-                } label: {
-                    ChoreRow(chore: chore)
+                if isSelectingForDeletion {
+                    Button {
+                        onToggleSelection(chore)
+                    } label: {
+                        ChoreRow(
+                            chore: chore,
+                            isSelecting: true,
+                            isSelected: selectedChoreIDs.contains(chore.id)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button {
+                        onEdit(chore)
+                    } label: {
+                        ChoreRow(chore: chore)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
         .padding(20)
@@ -61,6 +77,19 @@ struct ChoresCard: View {
         chores: Chore.previewList,
         onAdd: {},
         onEdit: { _ in }
+    )
+    .padding()
+    .background(Color(.systemGroupedBackground))
+}
+
+#Preview("Chores Card Selecting") {
+    ChoresCard(
+        chores: Chore.previewList,
+        onAdd: {},
+        onEdit: { _ in },
+        isSelectingForDeletion: true,
+        selectedChoreIDs: Set([Chore.previewList.first?.id].compactMap { $0 }),
+        onToggleSelection: { _ in }
     )
     .padding()
     .background(Color(.systemGroupedBackground))

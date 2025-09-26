@@ -18,6 +18,7 @@ struct EditChoreSheet: View {
         NavigationStack {
             Form {
                 detailsSection
+                assigneesSection
                 rewardSection
                 deleteSection
             }
@@ -34,20 +35,6 @@ private extension EditChoreSheet {
     var detailsSection: some View {
         Section("Details") {
             TextField("Chore name", text: $draft.name)
-            Picker(
-                "Assigned to",
-                selection: Binding(
-                    get: { draft.assignedTo.first ?? "" },
-                    set: { newValue in
-                        draft.assignedTo = newValue.isEmpty ? [] : [newValue]
-                    }
-                )
-            ) {
-                Text("Unassigned").tag("")
-                ForEach(viewModel.availableKids, id: \.self) { kid in
-                    Text(kid).tag(kid)
-                }
-            }
             DatePicker("Due date", selection: $draft.dueDate, displayedComponents: .date)
             Picker("Frequency", selection: $draft.frequency) {
                 ForEach(Chore.Frequency.allCases) { freq in
@@ -55,6 +42,31 @@ private extension EditChoreSheet {
                 }
             }
             iconPicker
+        }
+    }
+
+    var assigneesSection: some View {
+        Section("Assign To") {
+            if draft.assignedTo.isEmpty {
+                Text("Currently unassigned")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(draft.assignedTo.joined(separator: ", "))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(viewModel.availableKids, id: \.self) { kid in
+                Toggle(kid, isOn: toggleBinding(for: kid))
+            }
+
+            if !draft.assignedTo.isEmpty {
+                Button("Clear Selection") {
+                    draft.assignedTo.removeAll()
+                }
+                .tint(.red)
+            }
         }
     }
 
@@ -88,9 +100,26 @@ private extension EditChoreSheet {
                 }
             }
         }
-        .onChange(of: draft.icon) { newValue in
+        .onChange(of: draft.icon) { _, newValue in
             if let first = newValue.first { draft.icon = String(first) } else { draft.icon = "" }
         }
+    }
+
+    func toggleBinding(for kid: String) -> Binding<Bool> {
+        Binding(
+            get: { draft.assignedTo.contains(kid) },
+            set: { isSelected in
+                if isSelected {
+                    var updated = Set(draft.assignedTo)
+                    updated.insert(kid)
+                    draft.assignedTo = viewModel.availableKids.filter { updated.contains($0) }
+                } else {
+                    var updated = Set(draft.assignedTo)
+                    updated.remove(kid)
+                    draft.assignedTo = viewModel.availableKids.filter { updated.contains($0) }
+                }
+            }
+        )
     }
 
     var rewardSection: some View {

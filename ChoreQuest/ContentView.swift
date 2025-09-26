@@ -1,10 +1,14 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var familyViewModel = FamilyViewModel()
     @StateObject private var choresViewModel = ChoresViewModel()
+    @StateObject private var rewardsViewModel = RewardsViewModel()
     var body: some View {
         MainTabView()
+            .environmentObject(familyViewModel)
             .environmentObject(choresViewModel)
+            .environmentObject(rewardsViewModel)
     }
 }
 
@@ -21,7 +25,7 @@ struct MainTabView: View {
                     Label("Chores", systemImage: "star")
                 }
 
-            PlaceholderView(title: "Rewards")
+            RewardsHomeView()
                 .tabItem {
                     Label("Rewards", systemImage: "gift")
                 }
@@ -32,4 +36,3 @@ struct MainTabView: View {
 #Preview {
     ContentView()
 }
-

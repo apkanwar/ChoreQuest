@@ -5,6 +5,7 @@ struct EditChoreSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft: Chore
+    @FocusState private var emojiFieldFocused: Bool
 
     private let icons = ["🧹","🛏️","🗑️","📚","🧺","🍽️","🧼","🧽"]
 
@@ -33,7 +34,15 @@ private extension EditChoreSheet {
     var detailsSection: some View {
         Section("Details") {
             TextField("Chore name", text: $draft.name)
-            Picker("Assigned to", selection: $draft.assignedTo) {
+            Picker(
+                "Assigned to",
+                selection: Binding(
+                    get: { draft.assignedTo.first ?? "" },
+                    set: { newValue in
+                        draft.assignedTo = newValue.isEmpty ? [] : [newValue]
+                    }
+                )
+            ) {
                 Text("Unassigned").tag("")
                 ForEach(viewModel.availableKids, id: \.self) { kid in
                     Text(kid).tag(kid)
@@ -55,17 +64,32 @@ private extension EditChoreSheet {
                 Text("Icon")
                 Spacer()
                 TextField("Emoji", text: $draft.icon)
+                    .focused($emojiFieldFocused)
+                    .disableAutocorrection(true)
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
                     .multilineTextAlignment(.trailing)
                     .frame(width: 60)
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack {
+                    Button {
+                        emojiFieldFocused = true
+                    } label: {
+                        Image(systemName: "face.smiling")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Choose any emoji")
                     ForEach(icons, id: \.self) { emoji in
                         Button(emoji) { draft.icon = emoji }
                             .buttonStyle(.bordered)
                     }
                 }
             }
+        }
+        .onChange(of: draft.icon) { newValue in
+            if let first = newValue.first { draft.icon = String(first) } else { draft.icon = "" }
         }
     }
 

@@ -4,7 +4,7 @@ import Foundation
 struct Chore: Identifiable, Hashable, Codable {
     let id: UUID
     var name: String
-    var assignedTo: String
+    var assignedTo: [String]
     var dueDate: Date
     var rewardCoins: Int
     var punishmentCoins: Int
@@ -14,7 +14,7 @@ struct Chore: Identifiable, Hashable, Codable {
     init(
         id: UUID = UUID(),
         name: String,
-        assignedTo: String,
+        assignedTo: [String],
         dueDate: Date,
         rewardCoins: Int,
         punishmentCoins: Int,
@@ -47,7 +47,7 @@ struct Chore: Identifiable, Hashable, Codable {
 extension Chore {
     static let preview = Chore(
         name: "Make Bed",
-        assignedTo: "Akam",
+        assignedTo: ["Akam"],
         dueDate: .now.addingTimeInterval(86400),
         rewardCoins: 10,
         punishmentCoins: 5,
@@ -59,7 +59,7 @@ extension Chore {
         .preview,
         Chore(
             name: "Take out Trash",
-            assignedTo: "Ashley",
+            assignedTo: ["Ashley"],
             dueDate: .now.addingTimeInterval(172800),
             rewardCoins: 8,
             punishmentCoins: 5,
@@ -68,7 +68,7 @@ extension Chore {
         ),
         Chore(
             name: "Do Homework",
-            assignedTo: "Sunny",
+            assignedTo: ["Sunny"],
             dueDate: .now.addingTimeInterval(259200),
             rewardCoins: 12,
             punishmentCoins: 6,

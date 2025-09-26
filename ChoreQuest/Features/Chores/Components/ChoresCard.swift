@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ChoresCard: View {
     let chores: [Chore]
-    var onAdd: () -> Void
     var onEdit: (Chore) -> Void
     var isSelectingForDeletion: Bool = false
     var selectedChoreIDs: Set<UUID> = []
@@ -14,17 +13,6 @@ struct ChoresCard: View {
                 Text("Chores")
                     .font(.title3.bold())
                 Spacer()
-                Button(action: onAdd) {
-                    Label("Add Chore", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 12)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(Color.blue.opacity(0.15))
-                        )
-                }
-                .buttonStyle(.plain)
             }
             .padding(.bottom, 4)
 
@@ -75,7 +63,6 @@ struct ChoresCard: View {
 #Preview("Chores Card") {
     ChoresCard(
         chores: Chore.previewList,
-        onAdd: {},
         onEdit: { _ in }
     )
     .padding()
@@ -85,7 +72,6 @@ struct ChoresCard: View {
 #Preview("Chores Card Selecting") {
     ChoresCard(
         chores: Chore.previewList,
-        onAdd: {},
         onEdit: { _ in },
         isSelectingForDeletion: true,
         selectedChoreIDs: Set([Chore.previewList.first?.id].compactMap { $0 }),

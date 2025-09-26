@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 struct AddChoreSheet: View {
     @ObservedObject var viewModel: ChoresViewModel
@@ -11,6 +14,7 @@ struct AddChoreSheet: View {
     @State private var punishmentCoins: Int = 5
     @State private var frequency: Chore.Frequency = .daily
     @State private var icon: String = "🧹"
+    @FocusState private var emojiFieldFocused: Bool
 
     private let icons = ["🧹","🛏️","🗑️","📚","🧺","🍽️","🧼","🧽"]
 
@@ -54,12 +58,33 @@ private extension AddChoreSheet {
             HStack {
                 Text("Icon")
                 Spacer()
-                TextField("Emoji", text: $icon)
-                    .multilineTextAlignment(.trailing)
-                    .frame(width: 60)
+                TextField("Emoji", text: Binding(
+                    get: { icon },
+                    set: { newValue in
+                        if let first = newValue.first { icon = String(first) } else { icon = "" }
+                    }
+                ))
+                .focused($emojiFieldFocused)
+                .disableAutocorrection(true)
+                .keyboardType(.default)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+                .multilineTextAlignment(.trailing)
+                .frame(width: 60)
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack {
+                    Button {
+                        emojiFieldFocused = true
+                        #if os(macOS)
+                        NSApp.orderFrontCharacterPalette(nil)
+                        #endif
+                    } label: {
+                        Image(systemName: "face.smiling")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Choose any emoji")
                     ForEach(icons, id: \.self) { emoji in
                         Button(emoji) { icon = emoji }
                             .buttonStyle(.bordered)
@@ -103,9 +128,10 @@ private extension AddChoreSheet {
 
     func save() {
         guard !trimmedName.isEmpty else { return }
+        let assignees = assignedTo.isEmpty ? [] : [assignedTo]
         let newChore = Chore(
             name: trimmedName,
-            assignedTo: assignedTo,
+            assignedTo: assignees,
             dueDate: dueDate,
             rewardCoins: rewardCoins,
             punishmentCoins: punishmentCoins,

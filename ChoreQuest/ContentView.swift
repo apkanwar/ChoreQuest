@@ -1,8 +1,10 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var choresViewModel = ChoresViewModel()
     var body: some View {
         MainTabView()
+            .environmentObject(choresViewModel)
     }
 }
 
@@ -30,3 +32,4 @@ struct MainTabView: View {
 #Preview {
     ContentView()
 }
+

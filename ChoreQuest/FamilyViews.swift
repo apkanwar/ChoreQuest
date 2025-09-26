@@ -7,29 +7,89 @@ struct FamilyHomeView: View {
         .init(name: "Ashley", color: .yellow, coins: 15),
         .init(name: "Sunny", color: .green, coins: 120)
     ]
-    @State private var path = NavigationPath()
+    @State private var isPresentingAddKid = false
+    @State private var selectedKidForProfile: Kid?
 
     // Responsive width for iPad/macOS
     private var maxContentWidth: CGFloat { 640 }
-    private let headerHeight: CGFloat = 320
+    private let headerHeight: CGFloat = 200
+    private let headerTopContentOffset: CGFloat = 32
 
     var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack {
             ZStack(alignment: .top) {
                 headerView
 
                 ScrollView(.vertical) {
-                    Color.clear.frame(height: headerHeight)
+                    Color.clear.frame(height: headerHeight - headerTopContentOffset)
                     content
                 }
                 .zIndex(0)
+            }
+            .overlay(alignment: .top) {
+                HStack {
+                    Spacer()
+                    Button {
+                        isPresentingAddKid = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(.black)
+                            .frame(width: 44, height: 44)
+                            .glassEffect(.regular.interactive(), in: .circle)
+                    }
+                    .accessibilityLabel("Add Kid")
+                    #if os(iOS)
+                    .hoverEffect(.lift)
+                    #endif
+                }
+                .frame(maxWidth: maxContentWidth)
+                .padding(.horizontal)
+                .padding(.vertical, 100)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
             .background(
                 Color(.systemGroupedBackground)
                     .ignoresSafeArea()
             )
-            .navigationDestination(for: Kid.self) { kid in
-                KidDetailView(kid: kid)
+            .sheet(isPresented: $isPresentingAddKid) {
+                AddKidSheet(kids: $kids)
+            }
+            .sheet(item: $selectedKidForProfile) { kid in
+                EditKidSheet(
+                    kid: kid,
+                    onSave: { updated in
+                        if let idx = kids.firstIndex(where: { $0.id == updated.id }) {
+                            kids[idx] = updated
+                        }
+                        selectedKidForProfile = nil
+                    },
+                    onDelete: {
+                        kids.removeAll { $0.id == kid.id }
+                        selectedKidForProfile = nil
+                    }
+                )
+                #if os(iOS)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                #endif
+            }
+            .toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        // TODO: Show notifications
+                    } label: {
+                        Image(systemName: "bell")
+                    }
+                    .accessibilityLabel("Notifications")
+
+                    Button {
+                        // TODO: Open settings
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Settings")
+                }
             }
         }
     }
@@ -38,7 +98,7 @@ struct FamilyHomeView: View {
     private var content: some View {
         VStack(spacing: 20) {
             KidsCard(kids: $kids, onOpen: { kid in
-                path.append(kid)
+                selectedKidForProfile = kid
             })
                 .frame(maxWidth: maxContentWidth)
                 .padding(.horizontal)
@@ -60,51 +120,23 @@ private extension FamilyHomeView {
 struct KidsCard: View {
     @Binding var kids: [Kid]
     var onOpen: (Kid) -> Void
-    @State private var showingAddKid = false
-    @State private var selectedKid: Kid?
-
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Kids")
                     .font(.title3.bold())
                 Spacer()
-                Button {
-                    showingAddKid = true
-                } label: {
-                    Label("Add Kid", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 12)
-                        .background(Capsule().fill(Color.blue.opacity(0.15)))
-                }
-                .buttonStyle(.plain)
-                .sheet(isPresented: $showingAddKid) {
-                    AddKidSheet(kids: $kids)
-                }
             }
             .padding(.bottom, 4)
 
             ForEach(kids) { kid in
                 Button {
-                    selectedKid = kid
+                    onOpen(kid)
                 } label: {
                     KidRow(kid: kid)
                 }
                 .buttonStyle(.plain)
-            }
-            .sheet(item: $selectedKid) { kid in
-                KidActionSheet(
-                    kid: kid,
-                    onOpen: {
-                        onOpen(kid)
-                        selectedKid = nil
-                    },
-                    onDelete: {
-                        deleteKid(kid)
-                        selectedKid = nil
-                    }
-                )
             }
         }
         .padding(20)
@@ -125,10 +157,6 @@ struct KidsCard: View {
                 }
             }
         )
-    }
-
-    private func deleteKid(_ kid: Kid) {
-        kids.removeAll { $0.id == kid.id }
     }
 }
 
@@ -231,12 +259,222 @@ struct AddKidSheet: View {
     }
 }
 
+struct EditKidSheet: View {
+    let kid: Kid
+    let onSave: (Kid) -> Void
+    let onDelete: (() -> Void)?
+    @EnvironmentObject var choresViewModel: ChoresViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var color: Color
+
+    private let palette: [Color] = [.pink, .yellow, .green, .orange, .purple, .teal, .blue]
+
+    @State private var showDeleteConfirmation = false
+
+    init(kid: Kid, onSave: @escaping (Kid) -> Void, onDelete: (() -> Void)? = nil) {
+        self.kid = kid
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _name = State(initialValue: kid.name)
+        _color = State(initialValue: kid.color)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                detailsSection
+                assignChoresSection
+                assignedChoresSection
+                savingsSection
+                if onDelete != nil {
+                    deleteSection
+                }
+            }
+            .navigationTitle("Edit Kid")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { toolbar }
+            .scrollContentBackground(.hidden)
+            .background(Color(.systemGroupedBackground))
+            .confirmationDialog("Delete \(kid.name)?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                Button("Delete", role: .destructive) {
+                    deleteKid()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This will remove the child and their local data from this device.")
+            }
+        }
+    }
+}
+
+private extension EditKidSheet {
+    var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var canSave: Bool {
+        !trimmedName.isEmpty
+    }
+
+    var detailsSection: some View {
+        Section("Details") {
+            TextField("Kid's name", text: $name)
+            #if os(iOS)
+                .textInputAutocapitalization(.words)
+            #endif
+
+            colorPicker
+        }
+    }
+
+    var colorPicker: some View {
+        ColorPicker("Color", selection: $color, supportsOpacity: false)
+    }
+
+    var savingsSection: some View {
+        Section("Savings") {
+            LabeledContent("Coins") {
+                Text("\(kid.coins) coins")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    var unassignedChores: [Chore] {
+        choresViewModel.chores.filter { $0.assignedTo.isEmpty }
+    }
+
+    var kidChores: [Chore] {
+        choresViewModel.chores.filter { $0.assignedTo.contains(kid.name) }
+    }
+
+    var assignChoresSection: some View {
+        Section("Assign Chores") {
+            if unassignedChores.isEmpty {
+                Text("No unassigned chores")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(unassignedChores) { chore in
+                    HStack {
+                        Text("\(chore.icon) \(chore.name)")
+                        Spacer()
+                        Button {
+                            assign(chore)
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .imageScale(.large)
+                                .foregroundStyle(.green)
+                                .opacity(0.75)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Assign")
+                    }
+                }
+            }
+        }
+    }
+
+    var assignedChoresSection: some View {
+        Section("Assigned to \(kid.name)") {
+            if kidChores.isEmpty {
+                Text("No chores assigned yet")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(kidChores) { chore in
+                    HStack {
+                        Text("\(chore.icon) \(chore.name)")
+                        Spacer()
+                        Button {
+                            unassign(chore)
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .imageScale(.large)
+                                .foregroundStyle(.red)
+                                .opacity(0.75)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove")
+                    }
+                    .swipeActions {
+                        Button(role: .destructive) {
+                            unassign(chore)
+                        } label: {
+                            Label("Remove", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func assign(_ chore: Chore) {
+        var updated = chore
+        updated.assignedTo = [kid.name]
+        choresViewModel.update(updated)
+    }
+
+    func unassign(_ chore: Chore) {
+        var updated = chore
+        updated.assignedTo = []
+        choresViewModel.update(updated)
+    }
+
+    func save() {
+        guard canSave else { return }
+        let oldName = kid.name
+        var updated = kid
+        updated.name = trimmedName
+        updated.color = color
+        onSave(updated)
+
+        if oldName != updated.name {
+            for var chore in choresViewModel.chores where chore.assignedTo.contains(oldName) {
+                chore.assignedTo = chore.assignedTo.map { $0 == oldName ? updated.name : $0 }
+                choresViewModel.update(chore)
+            }
+        }
+        dismiss()
+    }
+
+    var deleteSection: some View {
+        Section {
+            Button(role: .destructive) {
+                showDeleteConfirmation = true
+            } label: {
+                Label("Delete Kid", systemImage: "trash")
+            }
+        }
+    }
+
+    func deleteKid() {
+        guard let onDelete else { return }
+        onDelete()
+        dismiss()
+    }
+
+    @ToolbarContentBuilder
+    var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button("Cancel") { dismiss() }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+            Button("Save") { save() }
+                .disabled(!canSave)
+        }
+    }
+}
+
 struct KidDetailView: View {
     let kid: Kid
+    let onDelete: () -> Void
+    let onUpdate: (Kid) -> Void
+    @State private var isPresentingEdit = false
     @State private var assignedChores: [String] = ["Make bed", "Take out trash"]
     @State private var completedChores: [String] = ["Brush teeth"]
     @State private var overdueChores: [String] = []
     @State private var pendingRewards: [String] = ["Ice cream voucher"]
+    @State private var showConfirmDelete = false
 
     var body: some View {
         List {
@@ -269,83 +507,49 @@ struct KidDetailView: View {
                     ForEach(pendingRewards, id: \.self) { Text($0) }
                 }
             }
+
+            Section {
+                Button(role: .destructive) {
+                    showConfirmDelete = true
+                } label: {
+                    Text("Delete Kid")
+                }
+            }
         }
         .navigationTitle(kid.name)
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-struct KidActionSheet: View {
-    let kid: Kid
-    let onOpen: () -> Void
-    let onDelete: () -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var showConfirmDelete = false
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 24) {
-                HStack(spacing: 12) {
-                    Circle()
-                        .fill(kid.color.opacity(0.3))
-                        .frame(width: 54, height: 54)
-                        .overlay(
-                            Text(kid.initial)
-                                .font(.headline.bold())
-                        )
-                    VStack(alignment: .leading) {
-                        Text(kid.name).font(.title3.bold())
-                        Text("\(kid.coins) coins saved").foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-                .padding(.top)
-
-                VStack(spacing: 12) {
-                    Button {
-                        onOpen()
-                        dismiss()
-                    } label: {
-                        Label("Open Profile", systemImage: "chevron.right.circle.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button(role: .destructive) {
-                        showConfirmDelete = true
-                    } label: {
-                        Label("Delete Kid", systemImage: "trash")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
-                    .confirmationDialog("Delete \(kid.name)?", isPresented: $showConfirmDelete, titleVisibility: .visible) {
-                        Button("Delete", role: .destructive) {
-                            onDelete()
-                            dismiss()
-                        }
-                        Button("Cancel", role: .cancel) { }
-                    } message: {
-                        Text("This will remove the child and their local data from this device.")
-                    }
-                }
-
-                Spacer()
-            }
-            .padding()
-            .navigationTitle("Kid Options")
-            .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("Delete \(kid.name)?", isPresented: $showConfirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { onDelete() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This will remove the child and their local data from this device.")
         }
-        #if os(iOS)
-        .presentationDetents([.medium, .large])
-        #endif
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Edit") { isPresentingEdit = true }
+            }
+        }
+        .sheet(isPresented: $isPresentingEdit) {
+            EditKidSheet(
+                kid: kid,
+                onSave: { updated in
+                    onUpdate(updated)
+                },
+                onDelete: {
+                    onDelete()
+                }
+            )
+            #if os(iOS)
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            #endif
+        }
     }
 }
 
 
 #if DEBUG
 #Preview("Family Home") {
-    FamilyHomeView()
+    ContentView()
 }
 #endif

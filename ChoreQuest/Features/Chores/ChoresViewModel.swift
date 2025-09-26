@@ -33,10 +33,9 @@ final class ChoresViewModel: ObservableObject {
     }
 
     func assign(ids: Set<UUID>, to assignee: String) {
-        for index in chores.indices {
-            if ids.contains(chores[index].id) {
-                chores[index].assignedTo = assignee
-            }
+        let assignees = assignee.isEmpty ? [] : [assignee]
+        for index in chores.indices where ids.contains(chores[index].id) {
+            chores[index].assignedTo = assignees
         }
     }
 }

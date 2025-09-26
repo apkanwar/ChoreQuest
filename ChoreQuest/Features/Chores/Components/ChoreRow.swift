@@ -67,18 +67,27 @@ struct ChoreRow: View {
                 .frame(width: 46, height: 46)
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
         } else {
-            Circle()
-                .fill(iconColor.opacity(0.3))
-                .frame(width: 46, height: 46)
-                .overlay(
-                    Text(chore.icon.isEmpty ? "🧩" : chore.icon)
-                        .font(.title2)
-                )
+            VStack(spacing: 4) {
+                Circle()
+                    .fill(iconColor.opacity(0.3))
+                    .frame(width: 46, height: 46)
+                    .overlay(
+                        Text(chore.icon.isEmpty ? "🧩" : chore.icon)
+                            .font(.title2)
+                    )
+
+                Text(chore.frequency.displayName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(width: 60)
         }
     }
 
     private var metaLine: some View {
-        let assignee = chore.assignedTo.isEmpty ? "Unassigned" : chore.assignedTo
+        let assignee = chore.assignedTo.isEmpty ? "Unassigned" : chore.assignedTo.joined(separator: ", ")
         let dateText = chore.dueDate.formatted(.dateTime.month(.abbreviated).day())
 
         return HStack(spacing: 10) {
@@ -98,6 +107,7 @@ struct ChoreRow: View {
         }
         .font(.subheadline)
         .foregroundStyle(.secondary)
+        .lineLimit(1)
     }
 
     private var rewardLine: some View {

@@ -1,12 +1,19 @@
 import Foundation
 import Combine
+import SwiftUI
 
 final class RewardsViewModel: ObservableObject {
 
     @Published private(set) var rewards: [Reward]
 
-    init(rewards: [Reward] = Reward.previewList) {
+    init(rewards: [Reward] = []) {
         self.rewards = rewards
+    }
+
+    func replace(rewards: [Reward]) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            self.rewards = rewards
+        }
     }
 
     func add(_ reward: Reward) {
@@ -27,3 +34,4 @@ final class RewardsViewModel: ObservableObject {
         rewards[index] = reward
     }
 }
+

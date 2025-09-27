@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 
 final class ChoresViewModel: ObservableObject {
 
@@ -7,11 +8,21 @@ final class ChoresViewModel: ObservableObject {
     @Published private(set) var availableKids: [String]
 
     init(
-        chores: [Chore] = Chore.previewList,
-        availableKids: [String] = ["Akam", "Ashley", "Sunny"]
+        chores: [Chore] = [],
+        availableKids: [String] = []
     ) {
         self.chores = chores
         self.availableKids = availableKids
+    }
+
+    func replace(chores: [Chore]) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            self.chores = chores
+        }
+    }
+
+    func replaceAvailableKids(with names: [String]) {
+        availableKids = names
     }
 
     func add(_ chore: Chore) {
@@ -76,3 +87,4 @@ final class ChoresViewModel: ObservableObject {
         return ordered + extras.sorted()
     }
 }
+

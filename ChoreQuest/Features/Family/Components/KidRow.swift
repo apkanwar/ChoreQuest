@@ -51,7 +51,7 @@ struct KidRow: View {
 
 #if DEBUG
 #Preview("Kid Row", traits: .sizeThatFitsLayout) {
-    KidRow(kid: Kid.previewList.first ?? Kid(name: "Preview", color: .blue, coins: 0))
+    KidRow(kid: Kid.previewList.first ?? Kid(name: "Preview", colorHex: Kid.defaultColorHex, coins: 0))
         .padding()
 }
 #endif

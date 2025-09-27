@@ -48,7 +48,7 @@ private extension EditKidSheet {
             .textInputAutocapitalization(.words)
             #endif
 
-            ColorPicker("Color", selection: $draft.color, supportsOpacity: false)
+            ColorPicker("Color", selection: colorBinding, supportsOpacity: false)
         }
     }
 
@@ -96,6 +96,15 @@ private extension EditKidSheet {
 
     var trimmedName: String {
         draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var colorBinding: Binding<Color> {
+        Binding(
+            get: { draft.color },
+            set: { newColor in
+                draft = draft.updatingColor(newColor)
+            }
+        )
     }
 
     func assignmentBinding(for chore: Chore) -> Binding<Bool> {
@@ -153,3 +162,4 @@ private extension EditKidSheet {
         .environmentObject(ChoresViewModel())
 }
 #endif
+

@@ -5,8 +5,14 @@ final class FamilyViewModel: ObservableObject {
 
     @Published private(set) var kids: [Kid]
 
-    init(kids: [Kid] = Kid.previewList) {
+    init(kids: [Kid] = []) {
         self.kids = kids
+    }
+
+    func replaceKids(_ kids: [Kid]) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            self.kids = kids
+        }
     }
 
     func addKid(
@@ -18,7 +24,11 @@ final class FamilyViewModel: ObservableObject {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
 
-        let newKid = Kid(name: trimmedName, color: color, coins: 0)
+        let newKid = Kid(
+            name: trimmedName,
+            colorHex: color.hexString ?? Kid.defaultColorHex,
+            coins: 0
+        )
         kids.append(newKid)
         choresViewModel.addKid(trimmedName)
         performAssignmentUpdate(forKidNamed: trimmedName, with: assignedChoreIDs, choresViewModel: choresViewModel)
@@ -80,4 +90,3 @@ private extension FamilyViewModel {
         }
     }
 }
-

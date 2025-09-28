@@ -15,7 +15,7 @@ struct FamilySetupView: View {
                 Text("Would you like to start a new family or join an existing one?")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+                    .padding(.horizontal, 48)
             }
 
             VStack(spacing: 16) {
@@ -25,9 +25,6 @@ struct FamilySetupView: View {
                     VStack(spacing: 6) {
                         Text("Start a Family")
                             .font(.headline)
-                        Text("Create a hub for parents to manage chores and rewards.")
-                            .font(.subheadline)
-                            .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -41,9 +38,6 @@ struct FamilySetupView: View {
                     VStack(spacing: 6) {
                         Text("Join a Family")
                             .font(.headline)
-                        Text("Kids can see their assigned chores and rewards.")
-                            .font(.subheadline)
-                            .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
                     .padding()

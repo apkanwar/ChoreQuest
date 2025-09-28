@@ -5,6 +5,9 @@ final class FamilyViewModel: ObservableObject {
 
     @Published private(set) var kids: [Kid]
 
+    // MARK: - Family/Account
+    @Published var familyInviteCode: String = ""
+
     init(kids: [Kid] = []) {
         self.kids = kids
     }
@@ -61,6 +64,29 @@ final class FamilyViewModel: ObservableObject {
         choresViewModel: ChoresViewModel
     ) {
         performAssignmentUpdate(forKidNamed: kidName, with: selectedChoreIDs, choresViewModel: choresViewModel)
+    }
+
+    // MARK: - Family management stubs
+    func createFamily(named name: String) {
+        // TODO: Implement family creation logic
+        // For now, generate a mock invite code
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        familyInviteCode = String(trimmed.prefix(3)).uppercased() + "-" + UUID().uuidString.prefix(5).uppercased()
+    }
+
+    func joinFamily(with code: String) {
+        // TODO: Implement join logic
+        // For now, accept any non-empty code
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        familyInviteCode = trimmed.uppercased()
+    }
+
+    func logout() {
+        // TODO: Implement logout
+        kids.removeAll()
+        familyInviteCode = ""
     }
 }
 

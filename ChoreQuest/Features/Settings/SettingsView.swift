@@ -4,26 +4,59 @@ struct SettingsView: View {
     @EnvironmentObject private var session: AppSessionViewModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var showCreateFamily = false
     @State private var showJoinFamily = false
+
+    @State private var displayNameDraft: String = ""
+    @State private var familyNameDraft: String = ""
+    @State private var showToast: Bool = false
+    @State private var toastMessage: String = ""
+
+    @State private var latestKidInviteCode: String?
+    @State private var latestParentInviteCode: String?
+    
+    @State private var showLeaveAlert = false
+    @State private var leaveWarningMessage = ""
 
     var body: some View {
         NavigationStack {
             Form {
                 accountSection
                 familySection
+                if session.currentFamily != nil && session.profile?.role == .parent {
+                    invitesSection
+                }
                 actionsSection
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { syncDrafts() }
+            .onChange(of: session.profile) { syncDrafts() }
+            .onChange(of: session.currentFamily) { syncDrafts() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close", action: dismiss.callAsFunction)
                 }
+                if hasUnsavedChanges {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") { performSave() }
+                    }
+                }
             }
-        }
-        .sheet(isPresented: $showCreateFamily) {
-            CreateFamilySheet { session.createFamily(named: $0) }
+            .overlay(alignment: .top) {
+                if showToast {
+                    toastView
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .padding()
+                }
+            }
+            .alert("Leave family?", isPresented: $showLeaveAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Leave", role: .destructive) {
+                    session.leaveCurrentFamily()
+                }
+            } message: {
+                Text(leaveWarningMessage)
+            }
         }
         .sheet(isPresented: $showJoinFamily) {
             JoinFamilySheet { session.joinFamily(withCode: $0) }
@@ -35,9 +68,11 @@ struct SettingsView: View {
 private extension SettingsView {
     var accountSection: some View {
         Section("Account") {
-            if let profile = session.profile {
+            if session.profile != nil {
                 LabeledContent("Name") {
-                    Text(profile.displayName)
+                    TextField("Display name", text: $displayNameDraft)
+                        .textInputAutocapitalization(.words)
+                        .multilineTextAlignment(.trailing)
                 }
                 if let email = session.userEmail {
                     LabeledContent("Email") {
@@ -53,19 +88,24 @@ private extension SettingsView {
         Section("Family") {
             if let family = session.currentFamily {
                 LabeledContent("Family Name") {
-                    Text(family.name)
+                    if session.profile?.role == .parent {
+                        TextField("Family name", text: $familyNameDraft)
+                            .textInputAutocapitalization(.words)
+                            .multilineTextAlignment(.trailing)
+                    } else {
+                        Text(family.name)
+                    }
                 }
-                LabeledContent("Invite Code") {
-                    Text(family.inviteCode)
-                        .font(.monospaced(.body)())
+                Button("Join Another Family") { showJoinFamily = true }
+                Button(role: .destructive) {
+                    leaveFamilyTapped()
+                } label: {
+                    Text("Leave Current Family")
                 }
-                Button("Create New Family") { showCreateFamily = true }
-                Button("Join Different Family") { showJoinFamily = true }
             } else {
                 Text("You aren’t part of a family yet.")
                     .foregroundStyle(.secondary)
-                Button("Create Family") { showCreateFamily = true }
-                Button("Join Family") { showJoinFamily = true }
+                Button("Join Another Family") { showJoinFamily = true }
             }
         }
     }
@@ -76,6 +116,129 @@ private extension SettingsView {
                 Text("Log Out")
             }
         }
+    }
+
+    var invitesSection: some View {
+        Section("Invites") {
+            Button {
+                Task { await createInvite(role: .kid) }
+            } label: {
+                Label("Create Kid Invite", systemImage: "person.2.badge.key")
+            }
+            if let code = latestKidInviteCode {
+                LabeledContent("Kid Code") { Text(code).font(.monospaced(.body)()) }
+            }
+
+            Button {
+                Task { await createInvite(role: .parent) }
+            } label: {
+                Label("Create Parent Invite", systemImage: "person.badge.key")
+            }
+            if let code = latestParentInviteCode {
+                LabeledContent("Parent Code") { Text(code).font(.monospaced(.body)()) }
+            }
+        }
+    }
+}
+
+private extension SettingsView {
+    var hasUnsavedChanges: Bool {
+        let nameChanged: Bool = {
+            guard let profile = session.profile else { return false }
+            return displayNameDraft.trimmingCharacters(in: .whitespacesAndNewlines) != profile.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
+        let familyChanged: Bool = {
+            guard let family = session.currentFamily else { return false }
+            return familyNameDraft.trimmingCharacters(in: .whitespacesAndNewlines) != family.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
+        return nameChanged || familyChanged
+    }
+
+    func syncDrafts() {
+        if let profile = session.profile {
+            if displayNameDraft.isEmpty || displayNameDraft == "" || displayNameDraft == profile.displayName {
+                displayNameDraft = profile.displayName
+            }
+        }
+        if let family = session.currentFamily {
+            if familyNameDraft.isEmpty || familyNameDraft == "" || familyNameDraft == family.name {
+                familyNameDraft = family.name
+            }
+        }
+    }
+
+    func performSave() {
+        var didRequestSave = false
+
+        let trimmedDisplay = displayNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let profile = session.profile, trimmedDisplay != profile.displayName {
+            session.updateDisplayName(trimmedDisplay)
+            didRequestSave = true
+        }
+        let trimmedFamily = familyNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let family = session.currentFamily, trimmedFamily != family.name, session.profile?.role == .parent {
+            session.updateFamilyName(trimmedFamily)
+            didRequestSave = true
+        }
+        if didRequestSave {
+            showConfirmation("Saved")
+        }
+    }
+
+    var toastView: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            Text(toastMessage)
+                .font(.headline)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(radius: 4)
+    }
+
+    func showConfirmation(_ message: String) {
+        toastMessage = message
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
+            showToast = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                showToast = false
+            }
+        }
+    }
+
+    func createInvite(role: UserRole) async {
+        guard let familyId = session.currentFamily?.id else { return }
+        do {
+            let invite = try await sessionCreateInvite(familyId: familyId, role: role)
+            await MainActor.run {
+                switch role {
+                case .kid: latestKidInviteCode = invite.code
+                case .parent: latestParentInviteCode = invite.code
+                }
+                showConfirmation("Invite created")
+            }
+        } catch {
+            await MainActor.run { toastMessage = error.localizedDescription; showToast = true }
+        }
+    }
+
+    func sessionCreateInvite(familyId: String, role: UserRole) async throws -> FamilyInvite {
+        try await sessionCreateInviteProxy(familyId: familyId, role: role)
+    }
+    
+    func leaveFamilyTapped() {
+        // Build warning message based on role
+        var message = "Leaving this family will remove you from all associated data."
+        if session.profile?.role == .parent {
+            message += " If you are the only parent in this family, the family and its data will be deleted."
+        }
+        leaveWarningMessage = message
+        showLeaveAlert = true
     }
 }
 

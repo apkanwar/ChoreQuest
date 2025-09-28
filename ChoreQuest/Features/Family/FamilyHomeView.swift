@@ -2,9 +2,11 @@ import SwiftUI
 
 struct FamilyHomeView: View {
     @EnvironmentObject private var viewModel: FamilyViewModel
+    @EnvironmentObject private var session: AppSessionViewModel
 
     @State private var selectedKid: Kid?
     @State private var isPresentingAddKid = false
+    @State private var isPresentingSettings = false
 
     private let headerHeight: CGFloat = 200
     private var maxContentWidth: CGFloat { 640 }
@@ -36,11 +38,20 @@ struct FamilyHomeView: View {
                     Button {
                         isPresentingAddKid = true
                     } label: {
-                        Image(systemName: "plus")
+                        let base = Image(systemName: "plus")
                             .font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(.black)
                             .frame(width: 44, height: 44)
-                            .glassEffect(.regular.interactive(), in: .circle)
+
+                        if #available(iOS 18.0, macOS 15.0, *) {
+                            base.glassEffect(.regular.interactive(), in: .circle)
+                        } else {
+                            base
+                                .background(
+                                    Circle()
+                                        .fill(Color(.systemBackground))
+                                )
+                        }
                     }
                     .accessibilityLabel("Add Kid")
                     #if os(iOS)
@@ -62,6 +73,10 @@ struct FamilyHomeView: View {
             .sheet(isPresented: $isPresentingAddKid) {
                 AddKidSheet(viewModel: viewModel)
             }
+            .sheet(isPresented: $isPresentingSettings) {
+                FamilySettingsView()
+                    .environmentObject(session)
+            }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
@@ -72,7 +87,7 @@ struct FamilyHomeView: View {
                     .accessibilityLabel("Notifications")
 
                     Button {
-                        // TODO: Open settings
+                        isPresentingSettings = true
                     } label: {
                         Image(systemName: "gearshape")
                     }
@@ -94,8 +109,21 @@ private extension FamilyHomeView {
 
 #if DEBUG
 #Preview("Family Home") {
-    FamilyHomeView()
-        .environmentObject(FamilyViewModel())
-        .environmentObject(ChoresViewModel())
+    let familyVM = FamilyViewModel()
+    let choresVM = ChoresViewModel()
+    let rewardsVM = RewardsViewModel()
+    let session = AppSessionViewModel(
+        authService: MockAuthService(),
+        firestoreService: MockFirestoreService.shared,
+        storageService: MockStorageService(),
+        familyViewModel: familyVM,
+        choresViewModel: choresVM,
+        rewardsViewModel: rewardsVM
+    )
+    return FamilyHomeView()
+        .environmentObject(session)
+        .environmentObject(familyVM)
+        .environmentObject(choresVM)
+        .environmentObject(rewardsVM)
 }
 #endif

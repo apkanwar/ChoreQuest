@@ -28,6 +28,9 @@ final class AppSessionViewModel: ObservableObject {
     private let choresViewModel: ChoresViewModel
     private let rewardsViewModel: RewardsViewModel
 
+    private var cancellables = Set<AnyCancellable>()
+    private var isSyncSuspended = false
+
     convenience init(
         familyViewModel: FamilyViewModel,
         choresViewModel: ChoresViewModel,
@@ -58,6 +61,7 @@ final class AppSessionViewModel: ObservableObject {
         self.choresViewModel = choresViewModel
         self.rewardsViewModel = rewardsViewModel
         Task { await bootstrap() }
+        setUpSync()
     }
 
     func bootstrap() async {
@@ -137,14 +141,19 @@ final class AppSessionViewModel: ObservableObject {
         Task {
             await setProcessing(true)
             do {
-                let family = try await firestoreService.joinFamily(withCode: trimmed, user: profile, role: .kid)
+                let result = try await firestoreService.joinFamily(withInviteCode: trimmed, user: profile)
                 var updatedProfile = profile
-                updatedProfile.familyId = family.id
-                updatedProfile.role = .kid
+                updatedProfile.familyId = result.family.id
+                updatedProfile.role = result.role
                 try await firestoreService.saveUserProfile(updatedProfile)
                 self.profile = updatedProfile
-                await loadFamilyData(familyId: family.id)
-                state = .kid(updatedProfile)
+                await loadFamilyData(familyId: result.family.id)
+                switch result.role {
+                case .parent:
+                    state = .parent(updatedProfile)
+                case .kid:
+                    state = .kid(updatedProfile)
+                }
             } catch {
                 handle(error)
             }
@@ -172,9 +181,113 @@ final class AppSessionViewModel: ObservableObject {
     var userEmail: String? {
         authService.currentUser?.email
     }
+
+    func updateDisplayName(_ newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, var profile = self.profile else { return }
+        Task {
+            await setProcessing(true)
+            do {
+                profile.displayName = trimmed
+                try await firestoreService.saveUserProfile(profile)
+                await MainActor.run { self.profile = profile }
+            } catch {
+                handle(error)
+            }
+            await setProcessing(false)
+        }
+    }
+
+    func updateFamilyName(_ newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let profile = self.profile, profile.role == .parent, let familyId = profile.familyId else { return }
+        Task {
+            await setProcessing(true)
+            do {
+                try await firestoreService.updateFamilyName(familyId: familyId, name: trimmed)
+                await MainActor.run {
+                    if var family = self.currentFamily {
+                        family.name = trimmed
+                        self.currentFamily = family
+                    }
+                }
+            } catch {
+                handle(error)
+            }
+            await setProcessing(false)
+        }
+    }
+
+    func leaveCurrentFamily() {
+        guard var profile = self.profile, profile.familyId != nil else { return }
+        Task {
+            await setProcessing(true)
+            do {
+                try await firestoreService.leaveFamilyAndDeleteIfLastParent(user: profile)
+                // Clear local state and update profile
+                profile.familyId = nil
+                profile.role = nil
+                try await firestoreService.saveUserProfile(profile)
+                await MainActor.run {
+                    self.profile = profile
+                    self.currentFamily = nil
+                    self.clearFamilyData()
+                    self.state = .choosingRole(profile)
+                }
+            } catch {
+                handle(error)
+            }
+            await setProcessing(false)
+        }
+    }
 }
 
 private extension AppSessionViewModel {
+    func setUpSync() {
+        // Kids sync
+        familyViewModel.$kids
+            .receive(on: DispatchQueue.main)
+            .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
+            .sink { [weak self] kids in
+                guard let self else { return }
+                guard !self.isSyncSuspended else { return }
+                guard let profile = self.profile, profile.role == .parent, let familyId = profile.familyId else { return }
+                Task { [kids] in
+                    do { try await self.firestoreService.saveKids(kids, familyId: familyId) } catch { self.handle(error) }
+                }
+            }
+            .store(in: &cancellables)
+
+        // Chores sync
+        choresViewModel.$chores
+            .receive(on: DispatchQueue.main)
+            .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
+            .sink { [weak self] chores in
+                guard let self else { return }
+                guard !self.isSyncSuspended else { return }
+                guard let profile = self.profile, profile.role == .parent, let familyId = profile.familyId else { return }
+                Task { [chores] in
+                    do { try await self.firestoreService.saveChores(chores, familyId: familyId) } catch { self.handle(error) }
+                }
+            }
+            .store(in: &cancellables)
+
+        // Rewards sync
+        rewardsViewModel.$rewards
+            .receive(on: DispatchQueue.main)
+            .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
+            .sink { [weak self] rewards in
+                guard let self else { return }
+                guard !self.isSyncSuspended else { return }
+                guard let profile = self.profile, profile.role == .parent, let familyId = profile.familyId else { return }
+                Task { [rewards] in
+                    do { try await self.firestoreService.saveRewards(rewards, familyId: familyId) } catch { self.handle(error) }
+                }
+            }
+            .store(in: &cancellables)
+    }
+
     func authenticate(using operation: @escaping () async throws -> AuthenticatedUser) async {
         await setProcessing(true)
         do {
@@ -190,7 +303,7 @@ private extension AppSessionViewModel {
 
     func loadSession(for user: AuthenticatedUser) async {
         do {
-            if var existingProfile = try await firestoreService.fetchUserProfile(uid: user.id) {
+            if let existingProfile = try await firestoreService.fetchUserProfile(uid: user.id) {
                 if existingProfile.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     state = .profileSetup(user)
                     return
@@ -198,15 +311,16 @@ private extension AppSessionViewModel {
                 profile = existingProfile
                 if let familyId = existingProfile.familyId {
                     await loadFamilyData(familyId: familyId)
+                    switch existingProfile.role {
+                    case .parent:
+                        state = .parent(existingProfile)
+                    case .kid:
+                        state = .kid(existingProfile)
+                    case .none:
+                        state = .choosingRole(existingProfile)
+                    }
                 } else {
                     clearFamilyData()
-                }
-                switch existingProfile.role {
-                case .parent:
-                    state = .parent(existingProfile)
-                case .kid:
-                    state = .kid(existingProfile)
-                case .none:
                     state = .choosingRole(existingProfile)
                 }
             } else {
@@ -219,6 +333,7 @@ private extension AppSessionViewModel {
     }
 
     func loadFamilyData(familyId: String) async {
+        self.isSyncSuspended = true
         do {
             let snapshot = try await firestoreService.fetchFamilySnapshot(familyId: familyId)
             await MainActor.run {
@@ -227,12 +342,14 @@ private extension AppSessionViewModel {
                 self.choresViewModel.replace(chores: snapshot.chores)
                 self.choresViewModel.replaceAvailableKids(with: snapshot.kids.map(\.name))
                 self.rewardsViewModel.replace(rewards: snapshot.rewards)
+                self.isSyncSuspended = false
             }
         } catch {
             handle(error)
             await MainActor.run {
                 self.currentFamily = nil
                 self.clearFamilyData()
+                self.isSyncSuspended = false
             }
         }
     }
@@ -285,3 +402,4 @@ private extension UIViewController {
     }
 }
 #endif
+

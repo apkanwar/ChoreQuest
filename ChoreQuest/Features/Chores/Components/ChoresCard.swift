@@ -16,25 +16,29 @@ struct ChoresCard: View {
             }
             .padding(.bottom, 4)
 
-            ForEach(chores) { chore in
-                if isSelectingForDeletion {
-                    Button {
-                        onToggleSelection(chore)
-                    } label: {
-                        ChoreRow(
-                            chore: chore,
-                            isSelecting: true,
-                            isSelected: selectedChoreIDs.contains(chore.id)
-                        )
+            if chores.isEmpty {
+                emptyState
+            } else {
+                ForEach(chores) { chore in
+                    if isSelectingForDeletion {
+                        Button {
+                            onToggleSelection(chore)
+                        } label: {
+                            ChoreRow(
+                                chore: chore,
+                                isSelecting: true,
+                                isSelected: selectedChoreIDs.contains(chore.id)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Button {
+                            onEdit(chore)
+                        } label: {
+                            ChoreRow(chore: chore)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                } else {
-                    Button {
-                        onEdit(chore)
-                    } label: {
-                        ChoreRow(chore: chore)
-                    }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -59,6 +63,28 @@ struct ChoresCard: View {
     }
 }
 
+private extension ChoresCard {
+    var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "checklist")
+                .font(.system(size: 34))
+                .foregroundStyle(.secondary)
+            Text("No chores yet")
+                .font(.headline)
+            Text("Add chores and assign them to kids.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.all, 40)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.systemGray6))
+        )
+    }
+}
+
 #if DEBUG
 #Preview("Chores Card") {
     ChoresCard(
@@ -76,6 +102,15 @@ struct ChoresCard: View {
         isSelectingForDeletion: true,
         selectedChoreIDs: Set([Chore.previewList.first?.id].compactMap { $0 }),
         onToggleSelection: { _ in }
+    )
+    .padding()
+    .background(Color(.systemGroupedBackground))
+}
+
+#Preview("Chores Card Empty") {
+    ChoresCard(
+        chores: [],
+        onEdit: { _ in }
     )
     .padding()
     .background(Color(.systemGroupedBackground))

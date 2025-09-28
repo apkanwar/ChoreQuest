@@ -20,6 +20,7 @@ struct AddKidSheet: View {
         NavigationStack {
             Form {
                 detailsSection
+                infoSection
                 assignChoresSection
             }
             .navigationTitle("Add Kid")
@@ -40,6 +41,19 @@ private extension AddKidSheet {
             #endif
 
             ColorPicker("Color", selection: $selectedColor, supportsOpacity: false)
+        }
+    }
+
+    var infoSection: some View {
+        Section {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+                Text("Kids added here are local to this family only. To sync a kid’s account across devices, have them sign up and join using a Kid Invite link.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
         }
     }
 

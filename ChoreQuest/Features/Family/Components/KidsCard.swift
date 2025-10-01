@@ -5,14 +5,8 @@ struct KidsCard: View {
     var onOpen: (Kid) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Kids")
-                    .font(.title3.bold())
-                Spacer()
-            }
-            .padding(.bottom, 4)
-
+        VStack(alignment: .leading, spacing: AppSpacing.section) {
+            AppSectionHeader(title: "Kids")
             if kids.isEmpty {
                 emptyState
             } else {
@@ -26,23 +20,7 @@ struct KidsCard: View {
                 }
             }
         }
-        .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(Color(.systemBackground))
-                .shadow(color: Color.black.opacity(0.06), radius: 18, y: 10)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .stroke(Color.black.opacity(0.05), lineWidth: 0.5)
-                )
-        )
-        .background(
-            Group {
-                if #available(iOS 18.0, macOS 15.0, *) {
-                    Color.clear.glassEffect()
-                }
-            }
-        )
+        .appCardStyle()
     }
 }
 
@@ -60,11 +38,8 @@ private extension KidsCard {
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.all, 40)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color(.systemGray6))
-        )
+        .padding(.vertical, 40)
+        .appRowBackground(color: Color(.systemGray5))
     }
 }
 
@@ -72,12 +47,12 @@ private extension KidsCard {
 #Preview("Kids Card") {
     KidsCard(kids: Kid.previewList, onOpen: { _ in })
         .padding()
-        .background(Color(.systemGroupedBackground))
+        .background(AppColors.background)
 }
 
 #Preview("Kids Card Empty") {
     KidsCard(kids: [], onOpen: { _ in })
         .padding()
-        .background(Color(.systemGroupedBackground))
+        .background(AppColors.background)
 }
 #endif

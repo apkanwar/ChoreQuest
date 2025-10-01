@@ -2,10 +2,9 @@ import SwiftUI
 
 struct KidRow: View {
     let kid: Kid
-    @Environment(\.colorScheme) private var scheme
 
-    private var backgroundTint: Color {
-        Color.blue.opacity(scheme == .dark ? 0.14 : 0.08)
+    private var tileBackground: Color {
+        kid.color.opacity(0.18)
     }
 
     var body: some View {
@@ -32,16 +31,7 @@ struct KidRow: View {
             Image(systemName: "chevron.right")
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(backgroundTint)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 0.5)
-        )
+        .appRowBackground(color: tileBackground)
         .contentShape(Rectangle())
         #if os(iOS)
         .hoverEffect(.lift)

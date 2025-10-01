@@ -44,7 +44,7 @@ private extension EditRewardSheet {
         Section("Cost") {
             Stepper(value: $draft.cost, in: 0...500) {
                 LabeledContent("Cost") {
-                    Text("\(draft.cost) coins")
+                    Text("\(draft.cost) stars")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -117,3 +117,4 @@ private extension EditRewardSheet {
     EditRewardSheet(reward: .preview, viewModel: RewardsViewModel())
 }
 #endif
+

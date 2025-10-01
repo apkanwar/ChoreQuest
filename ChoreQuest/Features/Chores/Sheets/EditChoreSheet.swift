@@ -126,13 +126,13 @@ private extension EditChoreSheet {
         Section("Rewards & Consequences") {
             Stepper(value: $draft.rewardCoins, in: 0...500) {
                 LabeledContent("Reward") {
-                    Text("+\(draft.rewardCoins) coins")
+                    Text("+\(draft.rewardCoins) stars")
                         .foregroundStyle(.secondary)
                 }
             }
             Stepper(value: $draft.punishmentCoins, in: 0...500) {
                 LabeledContent("Punishment") {
-                    Text("-\(draft.punishmentCoins) coins")
+                    Text("-\(draft.punishmentCoins) stars")
                         .foregroundStyle(.secondary)
                 }
             }

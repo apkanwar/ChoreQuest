@@ -4,8 +4,6 @@ struct SettingsView: View {
     @EnvironmentObject private var session: AppSessionViewModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var showJoinFamily = false
-
     @State private var displayNameDraft: String = ""
     @State private var familyNameDraft: String = ""
     @State private var showToast: Bool = false
@@ -29,7 +27,15 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear { syncDrafts() }
+            .onAppear {
+                syncDrafts()
+                Task {
+                    if session.currentFamily != nil {
+                        await refreshLatestInvite(role: .kid)
+                        await refreshLatestInvite(role: .parent)
+                    }
+                }
+            }
             .onChange(of: session.profile) { syncDrafts() }
             .onChange(of: session.currentFamily) { syncDrafts() }
             .toolbar {
@@ -57,9 +63,6 @@ struct SettingsView: View {
             } message: {
                 Text(leaveWarningMessage)
             }
-        }
-        .sheet(isPresented: $showJoinFamily) {
-            JoinFamilySheet { session.joinFamily(withCode: $0) }
         }
     }
 
@@ -96,7 +99,6 @@ private extension SettingsView {
                         Text(family.name)
                     }
                 }
-                Button("Join Another Family") { showJoinFamily = true }
                 Button(role: .destructive) {
                     leaveFamilyTapped()
                 } label: {
@@ -105,7 +107,6 @@ private extension SettingsView {
             } else {
                 Text("You aren’t part of a family yet.")
                     .foregroundStyle(.secondary)
-                Button("Join Another Family") { showJoinFamily = true }
             }
         }
     }
@@ -120,22 +121,56 @@ private extension SettingsView {
 
     var invitesSection: some View {
         Section("Invites") {
-            Button {
-                Task { await createInvite(role: .kid) }
-            } label: {
-                Label("Create Kid Invite", systemImage: "person.2.badge.key")
-            }
-            if let code = latestKidInviteCode {
-                LabeledContent("Kid Code") { Text(code).font(.monospaced(.body)()) }
+            // Kid invite row
+            HStack {
+                Button {
+                    Task { await createInvite(role: .kid) }
+                } label: {
+                    Label("Create Kid Invite", systemImage: "person.2.badge.key")
+                }
+                Spacer()
+                if let code = latestKidInviteCode {
+                    Text(code)
+                        .font(.monospaced(.body)())
+                        .onTapGesture {
+                            #if canImport(UIKit)
+                            UIPasteboard.general.string = code
+                            #endif
+                            toastMessage = "Copied"
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
+                                showToast = true
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                withAnimation(.easeInOut(duration: 0.25)) { showToast = false }
+                            }
+                        }
+                }
             }
 
-            Button {
-                Task { await createInvite(role: .parent) }
-            } label: {
-                Label("Create Parent Invite", systemImage: "person.badge.key")
-            }
-            if let code = latestParentInviteCode {
-                LabeledContent("Parent Code") { Text(code).font(.monospaced(.body)()) }
+            // Parent invite row
+            HStack {
+                Button {
+                    Task { await createInvite(role: .parent) }
+                } label: {
+                    Label("Create Parent Invite", systemImage: "person.badge.key")
+                }
+                Spacer()
+                if let code = latestParentInviteCode {
+                    Text(code)
+                        .font(.monospaced(.body)())
+                        .onTapGesture {
+                            #if canImport(UIKit)
+                            UIPasteboard.general.string = code
+                            #endif
+                            toastMessage = "Copied"
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
+                                showToast = true
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                withAnimation(.easeInOut(duration: 0.25)) { showToast = false }
+                            }
+                        }
+                }
             }
         }
     }
@@ -226,6 +261,21 @@ private extension SettingsView {
             await MainActor.run { toastMessage = error.localizedDescription; showToast = true }
         }
     }
+    
+    func refreshLatestInvite(role: UserRole) async {
+        guard let familyId = session.currentFamily?.id else { return }
+        do {
+            let invite = try await sessionFetchLatestInviteProxy(familyId: familyId, role: role)
+            await MainActor.run {
+                switch role {
+                case .kid: latestKidInviteCode = invite?.code
+                case .parent: latestParentInviteCode = invite?.code
+                }
+            }
+        } catch {
+            await MainActor.run { toastMessage = error.localizedDescription; showToast = true }
+        }
+    }
 
     func sessionCreateInvite(familyId: String, role: UserRole) async throws -> FamilyInvite {
         try await sessionCreateInviteProxy(familyId: familyId, role: role)
@@ -243,19 +293,16 @@ private extension SettingsView {
 }
 
 #if DEBUG
-#Preview("Settings") {
-    let familyVM = FamilyViewModel()
-    let choresVM = ChoresViewModel()
-    let rewardsVM = RewardsViewModel()
-    let session = AppSessionViewModel(
-        authService: MockAuthService(),
-        firestoreService: MockFirestoreService.shared,
-        storageService: MockStorageService(),
-        familyViewModel: familyVM,
-        choresViewModel: choresVM,
-        rewardsViewModel: rewardsVM
-    )
+#Preview("Settings – Parent") {
+    let session = AppSessionViewModel.previewParentSession(familyName: "Williams")
+    return SettingsView()
+        .environmentObject(session)
+}
+
+#Preview("Settings – Kid") {
+    let session = AppSessionViewModel.previewKidSession(familyName: "Williams")
     return SettingsView()
         .environmentObject(session)
 }
 #endif
+

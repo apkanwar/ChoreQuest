@@ -7,6 +7,8 @@ protocol FirestoreService {
     func createInvite(familyId: String, role: UserRole, maxUses: Int?, expiresAt: Date?) async throws -> FamilyInvite
     func joinFamily(withInviteCode code: String, user profile: UserProfile) async throws -> (family: Family, role: UserRole)
     func fetchFamilySnapshot(familyId: String) async throws -> FamilyDataSnapshot
+    func fetchLatestInvite(familyId: String, role: UserRole) async throws -> FamilyInvite?
+    func fetchUserRoleInFamily(familyId: String, userId: String) async throws -> UserRole?
 
     func updateFamilyName(familyId: String, name: String) async throws
 
@@ -15,6 +17,14 @@ protocol FirestoreService {
     func saveRewards(_ rewards: [Reward], familyId: String) async throws
 
     func leaveFamilyAndDeleteIfLastParent(user profile: UserProfile) async throws
+
+    func addChoreSubmission(_ submission: ChoreSubmission, familyId: String) async throws
+    func addHistoryEntry(_ entry: HistoryEntry, familyId: String) async throws
+    func fetchHistory(familyId: String) async throws -> [HistoryEntry]
+    func updateKidCoins(kidName: String, delta: Int, familyId: String) async throws
+
+    func fetchSubmissions(familyId: String) async throws -> [ChoreSubmission]
+    func updateSubmissionStatus(familyId: String, submissionId: UUID, status: SubmissionStatus, reviewer: String?, rejectionReason: String?) async throws
 }
 
 struct FirestoreServiceFactory {
@@ -39,6 +49,8 @@ final class FirebaseFirestoreService: FirestoreService {
         static let chores = "chores"
         static let rewards = "rewards"
         static let invites = "invites"
+        static let submissions = "submissions"
+        static let history = "history"
     }
 
     private let db = Firestore.firestore()
@@ -54,11 +66,24 @@ final class FirebaseFirestoreService: FirestoreService {
             "displayName": profile.displayName,
             "updatedAt": FieldValue.serverTimestamp()
         ]
-        if let role = profile.role { data["role"] = role.rawValue }
-        if let familyId = profile.familyId { data["familyId"] = familyId }
+
+        // Ensure server fields are cleared when the local profile has nil values
+        if let role = profile.role {
+            data["role"] = role.rawValue
+        } else {
+            data["role"] = FieldValue.delete()
+        }
+
+        if let familyId = profile.familyId {
+            data["familyId"] = familyId
+        } else {
+            data["familyId"] = FieldValue.delete()
+        }
+
         if profile.createdAt == nil {
             data["createdAt"] = FieldValue.serverTimestamp()
         }
+
         try await db.collection(Collection.users).document(profile.id).setData(data, merge: true)
     }
 
@@ -91,7 +116,21 @@ final class FirebaseFirestoreService: FirestoreService {
 
     func createInvite(familyId: String, role: UserRole, maxUses: Int?, expiresAt: Date?) async throws -> FamilyInvite {
         let familyRef = db.collection(Collection.families).document(familyId)
-        let inviteRef = familyRef.collection(Collection.invites).document()
+        let invitesRef = familyRef.collection(Collection.invites)
+        // Purge expired invites first so they don't count toward the cap
+        let nowTs = Timestamp(date: Date())
+        let expiredSnap = try await invitesRef.whereField("expiresAt", isLessThan: nowTs).getDocuments()
+        for doc in expiredSnap.documents {
+            try await doc.reference.delete()
+        }
+        // Enforce a maximum of 4 invites per family by deleting the oldest if needed
+        let existingInvites = try await invitesRef.order(by: "createdAt", descending: false).getDocuments()
+        if existingInvites.documents.count >= 4 {
+            if let oldest = existingInvites.documents.first {
+                try await oldest.reference.delete()
+            }
+        }
+        let inviteRef = invitesRef.document()
         let code = generateInviteCode(length: 8)
         // Determine current user id if available; fallback to empty string
         let createdBy = ""
@@ -138,6 +177,8 @@ final class FirebaseFirestoreService: FirestoreService {
         let expiresAt = (inviteData["expiresAt"] as? Timestamp)?.dateValue()
         if revoked { throw NSError(domain: "FirestoreService", code: 403, userInfo: [NSLocalizedDescriptionKey: "Invite revoked."]) }
         if let expiresAt, expiresAt < Date() {
+            // Delete expired invite proactively
+            try? await inviteDoc.reference.delete()
             throw NSError(domain: "FirestoreService", code: 403, userInfo: [NSLocalizedDescriptionKey: "Invite expired."])
         }
         if let maxUses, usedCount >= maxUses {
@@ -154,6 +195,7 @@ final class FirebaseFirestoreService: FirestoreService {
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             db.runTransaction({ (txn, errorPointer) -> Any? in
+                // Read the invite document fresh inside the transaction
                 let freshInvite: DocumentSnapshot
                 do {
                     freshInvite = try txn.getDocument(inviteDoc.reference)
@@ -175,12 +217,50 @@ final class FirebaseFirestoreService: FirestoreService {
                     return nil
                 }
 
+                // Prepare references
                 let memberRef = familyRef.collection(Collection.members).document(profile.id)
+                let isKid = (role == .kid)
+
+                // IMPORTANT: If the role is kid, read the kid document BEFORE any writes
+                var kidSnap: DocumentSnapshot? = nil
+                var kidRef: DocumentReference? = nil
+                if isKid {
+                    kidRef = familyRef.collection(Collection.kids).document(profile.id)
+                    do {
+                        kidSnap = try txn.getDocument(kidRef!)
+                    } catch let err as NSError {
+                        errorPointer?.pointee = err
+                        return nil
+                    }
+                }
+
+                // Now perform writes (all reads are completed above)
                 txn.setData([
                     "role": role.rawValue,
                     "joinedAt": FieldValue.serverTimestamp()
                 ], forDocument: memberRef, merge: true)
+
                 txn.updateData(["usedCount": freshUsed + 1], forDocument: inviteDoc.reference)
+
+                if isKid, let kidRef = kidRef {
+                    if let kidSnap, !kidSnap.exists {
+                        txn.setData([
+                            "name": profile.displayName,
+                            "colorHex": Kid.defaultColorHex,
+                            "coins": 0,
+                            "userId": profile.id,
+                            "createdAt": FieldValue.serverTimestamp(),
+                            "updatedAt": FieldValue.serverTimestamp()
+                        ], forDocument: kidRef, merge: false)
+                    } else {
+                        // Keep the kid's name in sync with the profile's display name
+                        txn.setData([
+                            "name": profile.displayName,
+                            "updatedAt": FieldValue.serverTimestamp()
+                        ], forDocument: kidRef, merge: true)
+                    }
+                }
+
                 return nil
             }, completion: { (_, error) in
                 if let error = error {
@@ -212,10 +292,61 @@ final class FirebaseFirestoreService: FirestoreService {
         return FamilyDataSnapshot(family: family, kids: kids, chores: chores, rewards: rewards)
     }
 
+    func fetchLatestInvite(familyId: String, role: UserRole) async throws -> FamilyInvite? {
+        let invitesRef = db.collection(Collection.families).document(familyId).collection(Collection.invites)
+        // Query latest by createdAt desc and filter for role/revoked in client to avoid index issues
+        let snap = try await invitesRef.order(by: "createdAt", descending: true).limit(to: 10).getDocuments()
+        let now = Date()
+        for doc in snap.documents {
+            let data = doc.data()
+            let roleRaw = data["role"] as? String
+            let revoked = data["revoked"] as? Bool ?? false
+            let expiresAt = (data["expiresAt"] as? Timestamp)?.dateValue()
+            guard roleRaw == role.rawValue, !revoked else { continue }
+            if let expiresAt, expiresAt < now { continue }
+            // Build FamilyInvite from snapshot
+            let code = data["code"] as? String ?? ""
+            let createdBy = data["createdBy"] as? String ?? ""
+            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue()
+            let maxUses = data["maxUses"] as? Int
+            let usedCount = data["usedCount"] as? Int ?? 0
+            let invite = FamilyInvite(
+                id: doc.documentID,
+                familyId: familyId,
+                code: code,
+                role: role,
+                createdBy: createdBy,
+                createdAt: createdAt,
+                expiresAt: expiresAt,
+                maxUses: maxUses,
+                usedCount: usedCount,
+                revoked: revoked
+            )
+            return invite
+        }
+        return nil
+    }
+
+    func fetchUserRoleInFamily(familyId: String, userId: String) async throws -> UserRole? {
+        let familyRef = db.collection(Collection.families).document(familyId)
+        let memberDoc = try await familyRef.collection(Collection.members).document(userId).getDocument()
+        guard let data = memberDoc.data(), let roleRaw = data["role"] as? String else { return nil }
+        return UserRole(rawValue: roleRaw)
+    }
+
     func leaveFamilyAndDeleteIfLastParent(user profile: UserProfile) async throws {
         guard let familyId = profile.familyId else { return }
         let familyRef = db.collection(Collection.families).document(familyId)
         let membersRef = familyRef.collection(Collection.members)
+
+        // Determine the leaving user's role (prefer profile.role, fallback to member doc)
+        var leavingRole: UserRole? = profile.role
+        if leavingRole == nil {
+            let memberDoc = try await membersRef.document(profile.id).getDocument()
+            if let data = memberDoc.data(), let roleRaw = data["role"] as? String {
+                leavingRole = UserRole(rawValue: roleRaw)
+            }
+        }
 
         // Count current parents
         let parentsSnap = try await membersRef
@@ -223,8 +354,17 @@ final class FirebaseFirestoreService: FirestoreService {
             .getDocuments()
         let parentCount = parentsSnap.documents.count
 
-        if parentCount <= 1 {
-            // This user is the last parent (or no parents recorded); delete the entire family and its subcollections.
+        // If a kid leaves, remove only their membership and kid document
+        if leavingRole == .kid {
+            // Remove membership
+            try await membersRef.document(profile.id).delete()
+            // Remove kid document if it exists (kids created via join use userId as doc id)
+            try? await familyRef.collection(Collection.kids).document(profile.id).delete()
+            return
+        }
+
+        // If a parent leaves and they are the last parent, delete the entire family
+        if leavingRole == .parent && parentCount <= 1 {
             try await deleteCollection(membersRef)
             try await deleteCollection(familyRef.collection(Collection.kids))
             try await deleteCollection(familyRef.collection(Collection.chores))
@@ -232,7 +372,7 @@ final class FirebaseFirestoreService: FirestoreService {
             try await deleteCollection(familyRef.collection(Collection.invites))
             try await familyRef.delete()
         } else {
-            // Remove only this member from the family.
+            // Otherwise, remove only this member
             try await membersRef.document(profile.id).delete()
         }
     }
@@ -324,6 +464,124 @@ final class FirebaseFirestoreService: FirestoreService {
             batch.setData(data, forDocument: ref, merge: true)
         }
         try await batch.commit()
+    }
+
+    func addChoreSubmission(_ submission: ChoreSubmission, familyId: String) async throws {
+        let familyRef = db.collection(Collection.families).document(familyId)
+        let ref = familyRef.collection(Collection.submissions).document(submission.id.uuidString)
+        let data: [String: Any] = [
+            "choreId": submission.choreId.uuidString,
+            "choreName": submission.choreName,
+            "kidName": submission.kidName,
+            "photoURL": submission.photoURL,
+            "submittedAt": Timestamp(date: submission.submittedAt),
+            "rewardCoins": submission.rewardCoins,
+            "status": submission.status.rawValue,
+            "reviewedAt": submission.reviewedAt.map { Timestamp(date: $0) } as Any,
+            "reviewer": submission.reviewer as Any,
+            "rejectionReason": submission.rejectionReason as Any
+        ].compactMapValues { $0 }
+        try await ref.setData(data, merge: true)
+    }
+
+    func addHistoryEntry(_ entry: HistoryEntry, familyId: String) async throws {
+        let familyRef = db.collection(Collection.families).document(familyId)
+        let ref = familyRef.collection(Collection.history).document(entry.id.uuidString)
+        let data: [String: Any] = [
+            "type": entry.type.rawValue,
+            "kidName": entry.kidName,
+            "title": entry.title,
+            "details": entry.details,
+            "amount": entry.amount,
+            "timestamp": Timestamp(date: entry.timestamp),
+            "submissionId": entry.submissionId?.uuidString as Any,
+            "photoURL": entry.photoURL as Any
+        ].compactMapValues { $0 }
+        try await ref.setData(data, merge: true)
+    }
+
+    func fetchHistory(familyId: String) async throws -> [HistoryEntry] {
+        let familyRef = db.collection(Collection.families).document(familyId)
+        let snap = try await familyRef.collection(Collection.history).order(by: "timestamp", descending: true).getDocuments()
+        return snap.documents.compactMap { doc in
+            let data = doc.data()
+            guard let typeRaw = data["type"] as? String,
+                  let type = HistoryType(rawValue: typeRaw) else { return nil }
+            let kidName = data["kidName"] as? String ?? ""
+            let title = data["title"] as? String ?? ""
+            let details = data["details"] as? String ?? ""
+            let amount = data["amount"] as? Int ?? 0
+            let ts = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date()
+            return HistoryEntry(
+                id: UUID(uuidString: doc.documentID) ?? UUID(),
+                type: type,
+                kidName: kidName,
+                title: title,
+                details: details,
+                amount: amount,
+                timestamp: ts,
+                submissionId: (data["submissionId"] as? String).flatMap(UUID.init(uuidString:)),
+                photoURL: data["photoURL"] as? String
+            )
+        }
+    }
+
+    func fetchSubmissions(familyId: String) async throws -> [ChoreSubmission] {
+        let familyRef = db.collection(Collection.families).document(familyId)
+        let snap = try await familyRef.collection(Collection.submissions).order(by: "submittedAt", descending: true).getDocuments()
+        return snap.documents.compactMap { doc in
+            let data = doc.data()
+            let choreId = UUID(uuidString: data["choreId"] as? String ?? "") ?? UUID()
+            let choreName = data["choreName"] as? String ?? ""
+            let kidName = data["kidName"] as? String ?? ""
+            let photoURL = data["photoURL"] as? String ?? ""
+            let submittedAt = (data["submittedAt"] as? Timestamp)?.dateValue() ?? Date()
+            let rewardCoins = data["rewardCoins"] as? Int ?? 0
+            let statusRaw = data["status"] as? String ?? SubmissionStatus.pending.rawValue
+            let status = SubmissionStatus(rawValue: statusRaw) ?? .pending
+            let reviewedAt = (data["reviewedAt"] as? Timestamp)?.dateValue()
+            let reviewer = data["reviewer"] as? String
+            let rejectionReason = data["rejectionReason"] as? String
+            return ChoreSubmission(
+                id: UUID(uuidString: doc.documentID) ?? UUID(),
+                choreId: choreId,
+                choreName: choreName,
+                kidName: kidName,
+                photoURL: photoURL,
+                submittedAt: submittedAt,
+                rewardCoins: rewardCoins,
+                status: status,
+                reviewedAt: reviewedAt,
+                reviewer: reviewer,
+                rejectionReason: rejectionReason
+            )
+        }
+    }
+
+    func updateSubmissionStatus(familyId: String, submissionId: UUID, status: SubmissionStatus, reviewer: String?, rejectionReason: String?) async throws {
+        let familyRef = db.collection(Collection.families).document(familyId)
+        let ref = familyRef.collection(Collection.submissions).document(submissionId.uuidString)
+        var data: [String: Any] = [
+            "status": status.rawValue,
+            "reviewedAt": FieldValue.serverTimestamp()
+        ]
+        if let reviewer { data["reviewer"] = reviewer }
+        if let rejectionReason { data["rejectionReason"] = rejectionReason }
+        try await ref.setData(data, merge: true)
+    }
+
+    func updateKidCoins(kidName: String, delta: Int, familyId: String) async throws {
+        let familyRef = db.collection(Collection.families).document(familyId)
+        let kidsRef = familyRef.collection(Collection.kids)
+        // Fetch kids and update first match by name
+        let snap = try await kidsRef.whereField("name", isEqualTo: kidName).limit(to: 1).getDocuments()
+        if let doc = snap.documents.first {
+            let currentCoins = doc.data()["coins"] as? Int ?? 0
+            try await kidsRef.document(doc.documentID).setData([
+                "coins": currentCoins + delta,
+                "updatedAt": FieldValue.serverTimestamp()
+            ], merge: true)
+        }
     }
 }
 
@@ -442,6 +700,9 @@ final class MockFirestoreService: FirestoreService {
     private var storedInvitesByCode: [String: FamilyInvite] = [:]
     private var storedMembersByFamily: [String: [String: UserRole]] = [:]
 
+    private var storedSubmissionsByFamily: [String: [ChoreSubmission]] = [:]
+    private var storedHistoryByFamily: [String: [HistoryEntry]] = [:]
+
     func fetchUserProfile(uid: String) async throws -> UserProfile? {
         storedProfiles[uid]
     }
@@ -462,6 +723,23 @@ final class MockFirestoreService: FirestoreService {
     func createInvite(familyId: String, role: UserRole, maxUses: Int?, expiresAt: Date?) async throws -> FamilyInvite {
         guard storedFamilies[familyId] != nil else {
             throw NSError(domain: "MockFirestoreService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Family not found."])
+        }
+        // Purge expired invites for this family
+        let now = Date()
+        for (codeKey, invite) in storedInvitesByCode where invite.familyId == familyId {
+            if let exp = invite.expiresAt, exp < now {
+                storedInvitesByCode.removeValue(forKey: codeKey)
+            }
+        }
+        // Enforce a maximum of 4 invites per family by deleting the oldest if needed
+        let invitesForFamily = storedInvitesByCode.values.filter { $0.familyId == familyId }
+        if invitesForFamily.count >= 4 {
+            if let oldest = invitesForFamily.sorted(by: { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }).first {
+                // Remove the oldest from the dictionary
+                if let keyToRemove = storedInvitesByCode.first(where: { $0.value.id == oldest.id })?.key {
+                    storedInvitesByCode.removeValue(forKey: keyToRemove)
+                }
+            }
         }
         let id = UUID().uuidString
         let code = generateInviteCode(length: 8)
@@ -486,7 +764,11 @@ final class MockFirestoreService: FirestoreService {
             throw NSError(domain: "MockFirestoreService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Invite code not found."])
         }
         if invite.revoked { throw NSError(domain: "MockFirestoreService", code: 403, userInfo: [NSLocalizedDescriptionKey: "Invite revoked."]) }
-        if let exp = invite.expiresAt, exp < Date() { throw NSError(domain: "MockFirestoreService", code: 403, userInfo: [NSLocalizedDescriptionKey: "Invite expired."]) }
+        if let exp = invite.expiresAt, exp < Date() {
+            // Delete expired invite proactively
+            storedInvitesByCode.removeValue(forKey: invite.code)
+            throw NSError(domain: "MockFirestoreService", code: 403, userInfo: [NSLocalizedDescriptionKey: "Invite expired."])
+        }
         if let max = invite.maxUses, invite.usedCount >= max { throw NSError(domain: "MockFirestoreService", code: 403, userInfo: [NSLocalizedDescriptionKey: "Invite already used."]) }
         guard let family = storedFamilies[invite.familyId] else {
             throw NSError(domain: "MockFirestoreService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Family not found."])
@@ -505,15 +787,28 @@ final class MockFirestoreService: FirestoreService {
         guard let familyId = profile.familyId else { return }
         var members = storedMembersByFamily[familyId] ?? [:]
         let parentCount = members.values.filter { $0 == .parent }.count
-        if parentCount <= 1 {
-            // Delete the family and all associated mock data
+        let leavingRole = members[profile.id] ?? profile.role
+
+        // If a kid leaves, remove only their membership and any kid entry in the snapshot
+        if leavingRole == .kid {
+            members.removeValue(forKey: profile.id)
+            storedMembersByFamily[familyId] = members
+            if var snapshot = storedFamilyData[familyId] {
+                snapshot.kids.removeAll { $0.id == profile.id }
+                storedFamilyData[familyId] = snapshot
+            }
+            return
+        }
+
+        // If a parent leaves and they are the last parent, delete the entire family
+        if leavingRole == .parent && parentCount <= 1 {
             storedFamilies.removeValue(forKey: familyId)
             storedFamilyData.removeValue(forKey: familyId)
             storedMembersByFamily.removeValue(forKey: familyId)
             // Remove invites for that family
             storedInvitesByCode = storedInvitesByCode.filter { $0.value.familyId != familyId }
         } else {
-            // Just remove this member
+            // Otherwise, remove only this member
             members.removeValue(forKey: profile.id)
             storedMembersByFamily[familyId] = members
         }
@@ -529,6 +824,23 @@ final class MockFirestoreService: FirestoreService {
         let snapshot = FamilyDataSnapshot(family: family, kids: [], chores: [], rewards: [])
         storedFamilyData[familyId] = snapshot
         return snapshot
+    }
+
+    func fetchLatestInvite(familyId: String, role: UserRole) async throws -> FamilyInvite? {
+        let now = Date()
+        let candidates = storedInvitesByCode.values
+            .filter { $0.familyId == familyId && $0.role == role && !$0.revoked }
+            .filter { invite in
+                if let exp = invite.expiresAt { return exp >= now } else { return true }
+            }
+            .sorted { (a, b) in
+                (a.createdAt ?? .distantPast) > (b.createdAt ?? .distantPast)
+            }
+        return candidates.first
+    }
+
+    func fetchUserRoleInFamily(familyId: String, userId: String) async throws -> UserRole? {
+        return storedMembersByFamily[familyId]?[userId]
     }
 
     func updateFamilyName(familyId: String, name: String) async throws {
@@ -571,9 +883,51 @@ final class MockFirestoreService: FirestoreService {
         }
     }
 
+    func addChoreSubmission(_ submission: ChoreSubmission, familyId: String) async throws {
+        var list = storedSubmissionsByFamily[familyId] ?? []
+        list.append(submission)
+        storedSubmissionsByFamily[familyId] = list
+    }
+
+    func addHistoryEntry(_ entry: HistoryEntry, familyId: String) async throws {
+        var list = storedHistoryByFamily[familyId] ?? []
+        list.append(entry)
+        storedHistoryByFamily[familyId] = list
+    }
+
+    func fetchHistory(familyId: String) async throws -> [HistoryEntry] {
+        return (storedHistoryByFamily[familyId] ?? []).sorted { $0.timestamp > $1.timestamp }
+    }
+
+    func fetchSubmissions(familyId: String) async throws -> [ChoreSubmission] {
+        return (storedSubmissionsByFamily[familyId] ?? []).sorted { $0.submittedAt > $1.submittedAt }
+    }
+
+    func updateSubmissionStatus(familyId: String, submissionId: UUID, status: SubmissionStatus, reviewer: String?, rejectionReason: String?) async throws {
+        var list = storedSubmissionsByFamily[familyId] ?? []
+        if let idx = list.firstIndex(where: { $0.id == submissionId }) {
+            var item = list[idx]
+            item.status = status
+            item.reviewedAt = Date()
+            item.reviewer = reviewer
+            item.rejectionReason = rejectionReason
+            list[idx] = item
+            storedSubmissionsByFamily[familyId] = list
+        }
+    }
+
+    func updateKidCoins(kidName: String, delta: Int, familyId: String) async throws {
+        guard var snapshot = storedFamilyData[familyId] else { return }
+        if let idx = snapshot.kids.firstIndex(where: { $0.name == kidName }) {
+            var kid = snapshot.kids[idx]
+            kid.coins += delta
+            snapshot.kids[idx] = kid
+            storedFamilyData[familyId] = snapshot
+        }
+    }
+
     private func generateInviteCode(length: Int = 6) -> String {
         let characters = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
         return String((0..<length).compactMap { _ in characters.randomElement() })
     }
 }
-

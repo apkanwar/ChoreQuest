@@ -8,139 +8,133 @@ struct ChoresHomeView: View {
     @State private var selectedChoreIDs = Set<UUID>()
     @State private var showDeleteConfirmation = false
     @State private var isPresentingAddChore = false
-
-    private let headerHeight: CGFloat = 200
-    private var maxContentWidth: CGFloat { 640 }
-    private let headerTopContentOffset: CGFloat = 40
+    @State private var isPresentingSettings = false
+    @State private var isPresentingNotifications = false
 
     var body: some View {
         NavigationStack {
-            ZStack(alignment: .top) {
-                headerView
-
-                ScrollView {
-                    VStack(spacing: 16) {
-                        Color.clear
-                            .frame(height: headerHeight - headerTopContentOffset)
-
-                        ChoresCard(
-                            chores: viewModel.chores,
-                            onEdit: { selectedChore = $0 },
-                            isSelectingForDeletion: isSelectingForDeletion,
-                            selectedChoreIDs: selectedChoreIDs,
-                            onToggleSelection: { toggleSelection(for: $0) }
-                        )
-                        .padding(.horizontal, 16)
-                    }
-                    .padding(.bottom, 24)
-                }
-                .scrollIndicators(.hidden)
+            AppScreen {
+                ChoresCard(
+                    chores: viewModel.chores,
+                    onEdit: { selectedChore = $0 },
+                    isSelectingForDeletion: isSelectingForDeletion,
+                    selectedChoreIDs: selectedChoreIDs,
+                    onToggleSelection: { toggleSelection(for: $0) }
+                )
             }
             .overlay(alignment: .top) {
-                GlassEffectContainer(spacing: 20) {
-                    HStack(spacing: 12) {
-                        Spacer()
-                        // Add button on right with Liquid Glass effect
-                        Button {
-                            isPresentingAddChore = true
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 20, weight: .semibold))
-                                .foregroundStyle(.black)
-                                .frame(width: 44, height: 44)
-                                .glassEffect(.regular.interactive(), in: .circle)
-                        }
-                        .accessibilityLabel("Add Chore")
-                        #if os(iOS)
-                        .hoverEffect(.lift)
-                        #endif
-                    }
-                }
-                .frame(maxWidth: maxContentWidth)
-                .padding(.horizontal)
-                .padding(.vertical, 100)
-                .frame(maxWidth: .infinity, alignment: .center)
+                addChoreHeaderOverlay
             }
-            .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .sheet(item: $selectedChore) { chore in
                 EditChoreSheet(chore: chore, viewModel: viewModel)
             }
             .sheet(isPresented: $isPresentingAddChore) {
                 AddChoreSheet(viewModel: viewModel)
             }
+            .sheet(isPresented: $isPresentingNotifications) {
+                NotificationsView()
+            }
+            .sheet(isPresented: $isPresentingSettings) {
+                SettingsView()
+            }
             .alert("Delete selected chores?", isPresented: $showDeleteConfirmation) {
-                Button("Delete", role: .destructive) {
-                    deleteSelectedChores()
-                }
-                Button("Cancel", role: .cancel) { }
+                Button("Delete", role: .destructive) { deleteSelectedChores() }
+                Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This will remove \(selectedChoreIDs.count) chore\(selectedChoreIDs.count == 1 ? "" : "s").")
             }
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarLeading) {
-                    Button {
-                        if isSelectingForDeletion { exitSelectionMode() } else { beginSelectionMode() }
-                    } label: {
-                        if isSelectingForDeletion {
-                            Image(systemName: "xmark")
-                        } else {
-                            Text("Select")
-                        }
-                    }
-                    .accessibilityLabel(isSelectingForDeletion ? "Cancel" : "Select")
-
-                    if isSelectingForDeletion {
-                        Menu {
-                            Button(role: .destructive) {
-                                showDeleteConfirmation = true
-                            } label: {
-                                let selectionCount = selectedChoreIDs.count
-                                let title = selectionCount == 0 ? "Delete Selected" : "Delete Selected (\(selectionCount))"
-                                Label(title, systemImage: "trash")
-                            }
-                            .disabled(selectedChoreIDs.isEmpty)
-
-                            Divider()
-
-                            Button("Select All") {
-                                selectedChoreIDs = Set(viewModel.chores.map(\.id))
-                            }
-
-                            Button("Deselect All") {
-                                selectedChoreIDs.removeAll()
-                            }
-                        } label: {
-                            Label("Actions", systemImage: "ellipsis.circle")
-                        }
-                        .accessibilityLabel("Actions")
-                    }
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        // TODO: Show notifications
-                    } label: {
-                        Image(systemName: "bell")
-                    }
-                    .accessibilityLabel("Notifications")
-
-                    Button {
-                        // TODO: Open settings
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Settings")
-                }
-            }
+            .toolbar { toolbar }
         }
     }
 }
 
 private extension ChoresHomeView {
-    var headerView: some View {
-        HeaderCard()
-            .ignoresSafeArea(edges: .top)
-            .frame(height: headerHeight)
-            .zIndex(1000)
+    var addChoreHeaderOverlay: some View {
+        HStack {
+            Spacer()
+            Button { isPresentingAddChore = true } label: {
+                let base = Image(systemName: "plus")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.black)
+                    .frame(width: 44, height: 44)
+
+                if #available(iOS 18.0, macOS 15.0, *) {
+                    base.glassEffect(.regular.interactive(), in: .circle)
+                } else {
+                    base
+                        .background(
+                            Circle()
+                                .fill(Color(.systemBackground))
+                        )
+                }
+            }
+            .accessibilityLabel("Add Chore")
+            #if os(iOS)
+            .hoverEffect(.lift)
+            #endif
+        }
+        .frame(maxWidth: AppLayout.maxContentWidth)
+        .padding(.horizontal, AppSpacing.screenPadding)
+        .padding(.vertical, 100)
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    @ToolbarContentBuilder
+    var toolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarLeading) {
+            Button {
+                if isSelectingForDeletion {
+                    exitSelectionMode()
+                } else {
+                    beginSelectionMode()
+                }
+            } label: {
+                if isSelectingForDeletion {
+                    Image(systemName: "xmark")
+                } else {
+                    Text("Select")
+                }
+            }
+            .accessibilityLabel(isSelectingForDeletion ? "Cancel" : "Select")
+
+            if isSelectingForDeletion {
+                Menu {
+                    Button(role: .destructive) {
+                        showDeleteConfirmation = true
+                    } label: {
+                        let selectionCount = selectedChoreIDs.count
+                        let title = selectionCount == 0 ? "Delete Selected" : "Delete Selected (\(selectionCount))"
+                        Label(title, systemImage: "trash")
+                    }
+                    .disabled(selectedChoreIDs.isEmpty)
+
+                    Divider()
+
+                    Button("Select All") {
+                        selectedChoreIDs = Set(viewModel.chores.map(\.id))
+                    }
+
+                    Button("Deselect All") {
+                        selectedChoreIDs.removeAll()
+                    }
+                } label: {
+                    Label("Actions", systemImage: "ellipsis.circle")
+                }
+                .accessibilityLabel("Actions")
+            }
+        }
+
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button { isPresentingNotifications = true } label: {
+                Image(systemName: "bell")
+            }
+            .accessibilityLabel("Notifications")
+
+            Button { isPresentingSettings = true } label: {
+                Image(systemName: "gearshape")
+            }
+            .accessibilityLabel("Settings")
+        }
     }
 
     func beginSelectionMode() {
@@ -179,7 +173,20 @@ private extension ChoresHomeView {
 
 #if DEBUG
 #Preview("Chores Home") {
-    ChoresHomeView()
-        .environmentObject(ChoresViewModel())
+    let familyVM = FamilyViewModel()
+    let choresVM = ChoresViewModel()
+    let rewardsVM = RewardsViewModel()
+    let session = AppSessionViewModel(
+        authService: MockAuthService(),
+        firestoreService: MockFirestoreService.shared,
+        storageService: MockStorageService(),
+        familyViewModel: familyVM,
+        choresViewModel: choresVM,
+        rewardsViewModel: rewardsVM
+    )
+    return ChoresHomeView()
+        .environmentObject(session)
+        .environmentObject(choresVM)
 }
 #endif
+

@@ -4,9 +4,8 @@ struct ChoreRow: View {
     let chore: Chore
     var isSelecting: Bool = false
     var isSelected: Bool = false
-    @Environment(\.colorScheme) private var colorScheme
 
-    private var iconColor: Color {
+    private var accentColor: Color {
         let palette: [Color] = [.pink, .yellow, .green, .orange, .purple, .teal, .blue]
         let seed = chore.icon.isEmpty ? chore.name : chore.icon
         var hash = 0
@@ -17,10 +16,11 @@ struct ChoreRow: View {
         return palette[index]
     }
 
-    private var backgroundTint: Color {
-        let base = Color.blue.opacity(colorScheme == .dark ? 0.14 : 0.08)
-        guard isSelecting, isSelected else { return base }
-        return Color.accentColor.opacity(colorScheme == .dark ? 0.3 : 0.2)
+    private var rowBackground: Color {
+        if isSelecting, isSelected {
+            return Color.accentColor.opacity(0.25)
+        }
+        return AppColors.rowAccent
     }
 
     var body: some View {
@@ -30,7 +30,6 @@ struct ChoreRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(chore.name)
                     .font(.headline)
-                    .bold()
 
                 metaLine
 
@@ -39,20 +38,12 @@ struct ChoreRow: View {
 
             Spacer()
 
-            Image(systemName: "chevron.right")
-                .foregroundStyle(.secondary)
-                .opacity(isSelecting ? 0 : 1)
+            if !isSelecting {
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.secondary)
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(backgroundTint)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 0.5)
-        )
+        .appRowBackground(color: rowBackground)
         .contentShape(Rectangle())
         #if os(iOS)
         .hoverEffect(.lift)
@@ -69,7 +60,7 @@ struct ChoreRow: View {
         } else {
             VStack(spacing: 4) {
                 Circle()
-                    .fill(iconColor.opacity(0.3))
+                    .fill(accentColor.opacity(0.3))
                     .frame(width: 46, height: 46)
                     .overlay(
                         Text(chore.icon.isEmpty ? "🧩" : chore.icon)
@@ -91,19 +82,9 @@ struct ChoreRow: View {
         let dateText = chore.dueDate.formatted(.dateTime.month(.abbreviated).day())
 
         return HStack(spacing: 10) {
-            Label {
-                Text(assignee).bold()
-            } icon: {
-                Image(systemName: "person")
-            }
-            .labelStyle(.titleAndIcon)
+            Label(assignee, systemImage: "person")
             Divider().frame(height: 12)
-            Label {
-                Text(dateText).bold()
-            } icon: {
-                Image(systemName: "calendar")
-            }
-            .labelStyle(.titleAndIcon)
+            Label(dateText, systemImage: "calendar")
         }
         .font(.subheadline)
         .foregroundStyle(.secondary)
@@ -113,24 +94,18 @@ struct ChoreRow: View {
     private var rewardLine: some View {
         HStack(spacing: 12) {
             Label("+\(chore.rewardCoins)", systemImage: "star.circle")
-                .labelStyle(.titleAndIcon)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(
-                    Capsule()
-                        .fill(Color.green.opacity(0.3))
-                )
+                .background(Capsule().fill(Color.green.opacity(0.25)))
+
             Divider().frame(height: 12)
+
             Label("-\(chore.punishmentCoins)", systemImage: "exclamationmark.triangle")
-                .labelStyle(.titleAndIcon)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(
-                    Capsule()
-                        .fill(Color.red.opacity(0.3))
-                )
+                .background(Capsule().fill(Color.orange.opacity(0.25)))
         }
-        .font(.subheadline)
+        .font(.footnote)
         .foregroundStyle(.secondary)
     }
 }

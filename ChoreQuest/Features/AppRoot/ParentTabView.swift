@@ -17,6 +17,11 @@ struct ParentTabView: View {
                 .tabItem {
                     Label("Rewards", systemImage: "gift")
                 }
+
+            ParentHistoryView()
+                .tabItem {
+                    Label("History", systemImage: "clock")
+                }
         }
     }
 }
@@ -41,3 +46,4 @@ struct ParentTabView: View {
         .environmentObject(rewardsVM)
 }
 #endif
+

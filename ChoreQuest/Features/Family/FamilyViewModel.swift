@@ -58,6 +58,13 @@ final class FamilyViewModel: ObservableObject {
         choresViewModel.removeKid(named: kid.name)
     }
 
+    func addCoins(toKidNamed name: String, delta: Int) {
+        guard !name.isEmpty, delta != 0 else { return }
+        if let idx = kids.firstIndex(where: { $0.name == name }) {
+            kids[idx].coins += delta
+        }
+    }
+
     func updateAssignments(
         forKidNamed kidName: String,
         with selectedChoreIDs: Set<UUID>,

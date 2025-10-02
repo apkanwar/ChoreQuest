@@ -9,8 +9,6 @@ struct KidRewardsView: View {
     @State private var errorMessage: String?
     @State private var selectedReward: Reward?
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
-
     var body: some View {
         VStack(spacing: AppSpacing.section) {
             if rewardsVM.rewards.isEmpty {
@@ -55,16 +53,13 @@ private extension KidRewardsView {
     var rewardsCard: some View {
         VStack(alignment: .leading, spacing: AppSpacing.section) {
             AppSectionHeader(title: "Rewards")
-            LazyVGrid(columns: columns, spacing: AppSpacing.section) {
-                ForEach(rewardsVM.rewards) { reward in
-                    KidRewardTile(
-                        reward: reward,
-                        canRedeem: canAfford(reward),
-                        isProcessing: isRedeeming,
-                        onRedeem: { redeem(reward) }
-                    )
-                    .onTapGesture { selectedReward = reward }
-                }
+            ForEach(rewardsVM.rewards) { reward in
+                KidRewardTile(
+                    reward: reward,
+                    canRedeem: canAfford(reward),
+                    isProcessing: isRedeeming,
+                    onRedeem: { redeem(reward) }
+                )
             }
         }
         .appCardStyle()
@@ -137,28 +132,61 @@ private struct KidRewardTile: View {
     let isProcessing: Bool
     let onRedeem: () -> Void
 
+    private var accentColor: Color {
+        let palette: [Color] = [.pink, .yellow, .green, .orange, .purple, .teal, .blue]
+        let seed = reward.icon.isEmpty ? reward.name : reward.icon
+        var hash = 0
+        for scalar in seed.unicodeScalars {
+            hash = (hash &* 31) &+ Int(scalar.value)
+        }
+        let index = abs(hash) % palette.count
+        return palette[index]
+    }
+
     var body: some View {
-        VStack(spacing: 8) {
-            Text(reward.icon.isEmpty ? "🎁" : reward.icon)
-                .font(.system(size: 36))
-                .frame(height: 44)
-            Text(reward.name)
-                .font(.footnote.weight(.semibold))
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 14) {
+                Circle()
+                    .fill(accentColor.opacity(0.3))
+                    .frame(width: 46, height: 46)
+                    .overlay(
+                        Text(reward.icon.isEmpty ? "🎯" : reward.icon)
+                            .font(.title2)
+                    )
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(reward.name)
+                        .font(.headline)
+
+                    if !reward.details.isEmpty {
+                        Text(reward.details)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+
+                    Label("Cost: \(reward.cost) stars", systemImage: "star.circle")
+                        .labelStyle(.titleAndIcon)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color.yellow.opacity(0.3)))
+                }
+
+                Spacer()
+            }
+
             Button(action: onRedeem) {
-                Text("Redeem")
-                    .font(.caption.bold())
+                Label("Redeem for \(reward.cost) stars", systemImage: "checkmark.circle")
                     .frame(maxWidth: .infinity)
             }
+            .padding(.top)
+            .padding(.horizontal)
             .buttonStyle(.borderedProminent)
-            .controlSize(.small)
             .disabled(isProcessing || !canRedeem)
         }
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
-        .appRowBackground(color: AppColors.rowAccent)
+        .appRowBackground(color: Color.orange.opacity(0.12))
         .opacity(canRedeem ? 1 : 0.6)
         .accessibilityAction(named: Text("Redeem"), onRedeem)
         .accessibilityHint(canRedeem ? "Redeem this reward" : "Not enough stars yet")
@@ -176,3 +204,4 @@ private struct KidRewardTile: View {
         .environmentObject(familyVM)
 }
 #endif
+

@@ -59,7 +59,11 @@ private extension ChoresHomeView {
                     .frame(width: 44, height: 44)
 
                 if #available(iOS 18.0, macOS 15.0, *) {
-                    base.glassEffect(.regular.interactive(), in: .circle)
+                    if #available(iOS 26.0, *) {
+                        base.glassEffect(.regular.interactive(), in: .circle)
+                    } else {
+                        // Fallback on earlier versions
+                    }
                 } else {
                     base
                         .background(
@@ -79,7 +83,7 @@ private extension ChoresHomeView {
         .frame(maxWidth: .infinity, alignment: .center)
     }
 
-    @ToolbarContentBuilder
+        @ToolbarContentBuilder
     var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarLeading) {
             Button {
@@ -189,4 +193,3 @@ private extension ChoresHomeView {
         .environmentObject(choresVM)
 }
 #endif
-

@@ -3,7 +3,7 @@ import SwiftUI
 struct ParentSubmissionsReviewView: View {
     @EnvironmentObject private var session: AppSessionViewModel
 
-    @State private var submissions: [ChoreSubmission] = []
+    @State private var submissions: [Submission] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
 
@@ -13,36 +13,57 @@ struct ParentSubmissionsReviewView: View {
                 ForEach(submissions) { sub in
                     Section {
                         HStack(alignment: .top, spacing: 12) {
-                            AsyncImage(url: URL(string: sub.photoURL)) { image in
-                                image.resizable().scaledToFill()
-                            } placeholder: {
-                                ProgressView()
+                            if let urlString = sub.photoURL, let url = URL(string: urlString) {
+                                AsyncImage(url: url) { image in
+                                    image.resizable().scaledToFill()
+                                } placeholder: {
+                                    ProgressView()
+                                }
+                                .frame(width: 80, height: 80)
+                                .clipped()
+                                .cornerRadius(10)
+                            } else {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(Color(.secondarySystemBackground))
+                                    Image(systemName: sub.type == .chore ? "photo" : "gift")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(width: 80, height: 80)
                             }
-                            .frame(width: 80, height: 80)
-                            .clipped()
-                            .cornerRadius(10)
 
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack {
-                                    Text(sub.choreName).font(.headline)
+                                    Text(sub.displayTitle).font(.headline)
                                     Spacer()
                                     Text(sub.status.displayName)
                                         .font(.caption)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
-                                        .background(sub.status == .pending ? Color.yellow.opacity(0.2) : (sub.status == .approved ? Color.green.opacity(0.2) : Color.red.opacity(0.2)))
+                                        .foregroundStyle(statusColor(for: sub.status))
+                                        .background(statusColor(for: sub.status).opacity(0.2))
                                         .clipShape(Capsule())
                                 }
-                                Text("\(sub.kidName) • \(sub.submittedAt.formatted(date: .numeric, time: .shortened))")
+                                Text("\(sub.kidName) • \(sub.createdAt.formatted(date: .numeric, time: .shortened))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                if let reviewer = sub.reviewer, let reviewedAt = sub.reviewedAt {
+                                Label(sub.type.displayName, systemImage: sub.type == .chore ? "checkmark.seal" : "gift")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                if let delta = sub.pointsDeltaOnApproval {
+                                    Text(delta >= 0 ? "+\(delta) stars on approval" : "\(delta) stars on approval")
+                                        .font(.caption)
+                                        .foregroundStyle(delta >= 0 ? Color.green : Color.red)
+                                }
+
+                                if let reviewer = sub.reviewerName, let reviewedAt = sub.reviewedAt {
                                     Text("Reviewed by \(reviewer) • \(reviewedAt.formatted(date: .numeric, time: .shortened))")
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                 }
-                                if let reason = sub.rejectionReason, !reason.isEmpty {
-                                    Text("Reason: \(reason)")
+                                if let note = sub.decisionNote, !note.isEmpty {
+                                    Text("Note: \(note)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -92,17 +113,25 @@ private extension ParentSubmissionsReviewView {
         }
     }
 
-    func approve(_ sub: ChoreSubmission) {
+    func approve(_ sub: Submission) {
         Task {
             await session.approveSubmission(sub)
             await reload()
         }
     }
 
-    func reject(_ sub: ChoreSubmission) {
+    func reject(_ sub: Submission) {
         Task {
             await session.rejectSubmission(sub)
             await reload()
+        }
+    }
+
+    private func statusColor(for status: SubmissionStatus) -> Color {
+        switch status {
+        case .pending: return .yellow
+        case .approved: return .green
+        case .rejected: return .red
         }
     }
 }

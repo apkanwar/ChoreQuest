@@ -29,7 +29,11 @@ struct AppGlassBackground: View {
     var body: some View {
         Group {
             if #available(iOS 18.0, macOS 15.0, *) {
-                Color.clear.glassEffect()
+                if #available(iOS 26.0, *) {
+                    Color.clear.glassEffect()
+                } else {
+                    // Fallback on earlier versions
+                }
             } else {
                 Color.clear
             }

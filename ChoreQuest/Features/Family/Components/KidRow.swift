@@ -40,6 +40,7 @@ struct KidRow: View {
 }
 
 #if DEBUG
+@available(iOS 17.0, *)
 #Preview("Kid Row", traits: .sizeThatFitsLayout) {
     KidRow(kid: Kid.previewList.first ?? Kid(name: "Preview", colorHex: Kid.defaultColorHex, coins: 0))
         .padding()

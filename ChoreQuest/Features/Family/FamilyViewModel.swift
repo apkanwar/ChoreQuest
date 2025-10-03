@@ -18,25 +18,6 @@ final class FamilyViewModel: ObservableObject {
         }
     }
 
-    func addKid(
-        name: String,
-        color: Color,
-        choresViewModel: ChoresViewModel,
-        assignedChoreIDs: Set<UUID>
-    ) {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else { return }
-
-        let newKid = Kid(
-            name: trimmedName,
-            colorHex: color.hexString ?? Kid.defaultColorHex,
-            coins: 0
-        )
-        kids.append(newKid)
-        choresViewModel.addKid(trimmedName)
-        performAssignmentUpdate(forKidNamed: trimmedName, with: assignedChoreIDs, choresViewModel: choresViewModel)
-    }
-
     func updateKid(
         _ kid: Kid,
         originalKid: Kid,

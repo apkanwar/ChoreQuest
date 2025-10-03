@@ -97,7 +97,7 @@ private extension EditRewardSheet {
         }
     }
 
-    @ToolbarContentBuilder
+        @ToolbarContentBuilder
     var toolbar: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
             Button("Cancel") { dismiss() }
@@ -117,4 +117,3 @@ private extension EditRewardSheet {
     EditRewardSheet(reward: .preview, viewModel: RewardsViewModel())
 }
 #endif
-

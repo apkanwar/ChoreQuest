@@ -83,7 +83,7 @@ private extension EditKidSheet {
         }
     }
 
-    @ToolbarContentBuilder
+        @ToolbarContentBuilder
     var toolbar: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
             Button("Cancel") { dismiss() }
@@ -162,4 +162,3 @@ private extension EditKidSheet {
         .environmentObject(ChoresViewModel())
 }
 #endif
-

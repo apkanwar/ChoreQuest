@@ -18,13 +18,24 @@ protocol FirestoreService {
 
     func leaveFamilyAndDeleteIfLastParent(user profile: UserProfile) async throws
 
-    func addChoreSubmission(_ submission: ChoreSubmission, familyId: String) async throws
+    func createSubmission(_ submission: Submission, familyId: String) async throws
     func addHistoryEntry(_ entry: HistoryEntry, familyId: String) async throws
     func fetchHistory(familyId: String) async throws -> [HistoryEntry]
-    func updateKidCoins(kidName: String, delta: Int, familyId: String) async throws
+    func reverseHistoryEntry(
+        familyId: String,
+        entryId: UUID,
+        kidId: String?,
+        kidName: String,
+        delta: Int,
+        reversedByUid: String?,
+        reversedByName: String?
+    ) async throws
+    func updateKidCoins(kidId: String?, kidName: String, delta: Int, familyId: String) async throws
 
-    func fetchSubmissions(familyId: String) async throws -> [ChoreSubmission]
+    func fetchSubmissions(familyId: String) async throws -> [Submission]
     func updateSubmissionStatus(familyId: String, submissionId: UUID, status: SubmissionStatus, reviewer: String?, rejectionReason: String?) async throws
+
+    func cancelPendingSubmission(familyId: String, submissionId: UUID, requesterUid: String) async throws
 }
 
 struct FirestoreServiceFactory {
@@ -39,13 +50,15 @@ struct FirestoreServiceFactory {
 
 #if canImport(FirebaseFirestore)
 import FirebaseFirestore
+#if canImport(FirebaseFunctions)
+import FirebaseFunctions
+#endif
 
 final class FirebaseFirestoreService: FirestoreService {
     private enum Collection {
         static let users = "users"
         static let families = "families"
         static let members = "members"
-        static let kids = "kids"
         static let chores = "chores"
         static let rewards = "rewards"
         static let invites = "invites"
@@ -54,6 +67,9 @@ final class FirebaseFirestoreService: FirestoreService {
     }
 
     private let db = Firestore.firestore()
+#if canImport(FirebaseFunctions)
+    private let functions = Functions.functions(region: "us-east1")
+#endif
 
     func fetchUserProfile(uid: String) async throws -> UserProfile? {
         let snapshot = try await db.collection(Collection.users).document(uid).getDocument()
@@ -220,46 +236,37 @@ final class FirebaseFirestoreService: FirestoreService {
                 // Prepare references
                 let memberRef = familyRef.collection(Collection.members).document(profile.id)
                 let isKid = (role == .kid)
+                let existingMemberSnap: DocumentSnapshot
+                do {
+                    existingMemberSnap = try txn.getDocument(memberRef)
+                } catch let err as NSError {
+                    errorPointer?.pointee = err
+                    return nil
+                }
+                let existingMemberData = existingMemberSnap.data() ?? [:]
+                let memberExists = existingMemberSnap.exists
 
-                // IMPORTANT: If the role is kid, read the kid document BEFORE any writes
-                var kidSnap: DocumentSnapshot? = nil
-                var kidRef: DocumentReference? = nil
+                var memberData: [String: Any] = [
+                    "role": role.rawValue,
+                    "displayName": profile.displayName,
+                    "updatedAt": FieldValue.serverTimestamp()
+                ]
+                if !memberExists {
+                    memberData["joinedAt"] = FieldValue.serverTimestamp()
+                    memberData["createdAt"] = FieldValue.serverTimestamp()
+                }
+
                 if isKid {
-                    kidRef = familyRef.collection(Collection.kids).document(profile.id)
-                    do {
-                        kidSnap = try txn.getDocument(kidRef!)
-                    } catch let err as NSError {
-                        errorPointer?.pointee = err
-                        return nil
-                    }
+                    let preservedCoins = existingMemberData["coins"] as? Int ?? 0
+                    let preservedColor = existingMemberData["colorHex"] as? String ?? Kid.defaultColorHex
+                    memberData["coins"] = preservedCoins
+                    memberData["colorHex"] = preservedColor
                 }
 
                 // Now perform writes (all reads are completed above)
-                txn.setData([
-                    "role": role.rawValue,
-                    "joinedAt": FieldValue.serverTimestamp()
-                ], forDocument: memberRef, merge: true)
+                txn.setData(memberData, forDocument: memberRef, merge: true)
 
                 txn.updateData(["usedCount": freshUsed + 1], forDocument: inviteDoc.reference)
-
-                if isKid, let kidRef = kidRef {
-                    if let kidSnap, !kidSnap.exists {
-                        txn.setData([
-                            "name": profile.displayName,
-                            "colorHex": Kid.defaultColorHex,
-                            "coins": 0,
-                            "userId": profile.id,
-                            "createdAt": FieldValue.serverTimestamp(),
-                            "updatedAt": FieldValue.serverTimestamp()
-                        ], forDocument: kidRef, merge: false)
-                    } else {
-                        // Keep the kid's name in sync with the profile's display name
-                        txn.setData([
-                            "name": profile.displayName,
-                            "updatedAt": FieldValue.serverTimestamp()
-                        ], forDocument: kidRef, merge: true)
-                    }
-                }
 
                 return nil
             }, completion: { (_, error) in
@@ -354,19 +361,16 @@ final class FirebaseFirestoreService: FirestoreService {
             .getDocuments()
         let parentCount = parentsSnap.documents.count
 
-        // If a kid leaves, remove only their membership and kid document
+        // If a kid leaves, remove only their membership document
         if leavingRole == .kid {
             // Remove membership
             try await membersRef.document(profile.id).delete()
-            // Remove kid document if it exists (kids created via join use userId as doc id)
-            try? await familyRef.collection(Collection.kids).document(profile.id).delete()
             return
         }
 
         // If a parent leaves and they are the last parent, delete the entire family
         if leavingRole == .parent && parentCount <= 1 {
             try await deleteCollection(membersRef)
-            try await deleteCollection(familyRef.collection(Collection.kids))
             try await deleteCollection(familyRef.collection(Collection.chores))
             try await deleteCollection(familyRef.collection(Collection.rewards))
             try await deleteCollection(familyRef.collection(Collection.invites))
@@ -386,8 +390,11 @@ final class FirebaseFirestoreService: FirestoreService {
 
     func saveKids(_ kids: [Kid], familyId: String) async throws {
         let familyRef = db.collection(Collection.families).document(familyId)
-        let kidsRef = familyRef.collection(Collection.kids)
-        let existingDocs = try await kidsRef.getDocuments().documents
+        let membersRef = familyRef.collection(Collection.members)
+        let existingDocs = try await membersRef
+            .whereField("role", isEqualTo: UserRole.kid.rawValue)
+            .getDocuments()
+            .documents
         let existingIds = Set(existingDocs.map { $0.documentID })
         let newIds = Set(kids.map { $0.id })
         let toDelete = existingIds.subtracting(newIds)
@@ -395,17 +402,23 @@ final class FirebaseFirestoreService: FirestoreService {
         let batch = db.batch()
         // Delete removed kids
         for id in toDelete {
-            batch.deleteDocument(kidsRef.document(id))
+            batch.deleteDocument(membersRef.document(id))
         }
         // Upsert current kids
         for kid in kids {
-            let ref = kidsRef.document(kid.id)
-            let data: [String: Any] = [
-                "name": kid.name,
+            guard !kid.id.isEmpty else { continue }
+            let ref = membersRef.document(kid.id)
+            var data: [String: Any] = [
+                "role": UserRole.kid.rawValue,
+                "displayName": kid.name,
                 "colorHex": kid.colorHex,
                 "coins": kid.coins,
                 "updatedAt": FieldValue.serverTimestamp()
             ]
+            if !existingIds.contains(kid.id) {
+                data["createdAt"] = FieldValue.serverTimestamp()
+                data["joinedAt"] = FieldValue.serverTimestamp()
+            }
             batch.setData(data, forDocument: ref, merge: true)
         }
         try await batch.commit()
@@ -433,6 +446,7 @@ final class FirebaseFirestoreService: FirestoreService {
                 "punishmentCoins": chore.punishmentCoins,
                 "frequency": chore.frequency.rawValue,
                 "icon": chore.icon,
+                "paused": chore.paused,
                 "updatedAt": FieldValue.serverTimestamp()
             ]
             batch.setData(data, forDocument: ref, merge: true)
@@ -466,122 +480,304 @@ final class FirebaseFirestoreService: FirestoreService {
         try await batch.commit()
     }
 
-    func addChoreSubmission(_ submission: ChoreSubmission, familyId: String) async throws {
+    func createSubmission(_ submission: Submission, familyId: String) async throws {
         let familyRef = db.collection(Collection.families).document(familyId)
         let ref = familyRef.collection(Collection.submissions).document(submission.id.uuidString)
-        let data: [String: Any] = [
-            "choreId": submission.choreId.uuidString,
-            "choreName": submission.choreName,
+
+        var data: [String: Any] = [
+            "type": submission.type.rawValue,
+            "kidUid": submission.kidUid,
             "kidName": submission.kidName,
-            "photoURL": submission.photoURL,
-            "submittedAt": Timestamp(date: submission.submittedAt),
-            "rewardCoins": submission.rewardCoins,
+            "createdAt": Timestamp(date: submission.createdAt),
             "status": submission.status.rawValue,
-            "reviewedAt": submission.reviewedAt.map { Timestamp(date: $0) } as Any,
-            "reviewer": submission.reviewer as Any,
-            "rejectionReason": submission.rejectionReason as Any
-        ].compactMapValues { $0 }
+            "familyId": familyId
+        ]
+
+        if let choreId = submission.choreId {
+            data["choreId"] = choreId.uuidString
+        }
+        if let choreName = submission.choreName {
+            data["choreName"] = choreName
+        }
+        if let rewardId = submission.rewardId {
+            data["rewardId"] = rewardId.uuidString
+        }
+        if let rewardName = submission.rewardName {
+            data["rewardName"] = rewardName
+        }
+        if let rewardCoins = submission.rewardCoins {
+            data["rewardCoins"] = rewardCoins
+        }
+        if let rewardCost = submission.rewardCost {
+            data["rewardCost"] = rewardCost
+        }
+        if let storagePath = submission.storagePath {
+            data["storagePath"] = storagePath
+        }
+        if let photoURL = submission.photoURL {
+            data["photoURL"] = photoURL
+        }
+        if let reviewedAt = submission.reviewedAt {
+            data["reviewedAt"] = Timestamp(date: reviewedAt)
+        }
+        if let reviewerUid = submission.reviewerUid {
+            data["reviewerUid"] = reviewerUid
+        }
+        if let reviewerName = submission.reviewerName {
+            data["reviewerName"] = reviewerName
+        }
+        if let decisionNote = submission.decisionNote {
+            data["decisionNote"] = decisionNote
+        }
+
         try await ref.setData(data, merge: true)
     }
 
     func addHistoryEntry(_ entry: HistoryEntry, familyId: String) async throws {
         let familyRef = db.collection(Collection.families).document(familyId)
         let ref = familyRef.collection(Collection.history).document(entry.id.uuidString)
-        let data: [String: Any] = [
+        var data: [String: Any] = [
             "type": entry.type.rawValue,
             "kidName": entry.kidName,
             "title": entry.title,
-            "details": entry.details,
+//            "details": entry.details, // Removed as per instructions
             "amount": entry.amount,
             "timestamp": Timestamp(date: entry.timestamp),
             "submissionId": entry.submissionId?.uuidString as Any,
-            "photoURL": entry.photoURL as Any
-        ].compactMapValues { $0 }
+            "photoURL": entry.photoURL as Any,
+            "result": entry.result?.rawValue as Any,
+            "decidedByUid": entry.decidedByUid as Any,
+            "decidedByName": entry.decidedByName as Any,
+            "note": entry.note as Any
+        ]
+        data = data.compactMapValues { $0 }
         try await ref.setData(data, merge: true)
     }
 
     func fetchHistory(familyId: String) async throws -> [HistoryEntry] {
         let familyRef = db.collection(Collection.families).document(familyId)
         let snap = try await familyRef.collection(Collection.history).order(by: "timestamp", descending: true).getDocuments()
-        return snap.documents.compactMap { doc in
+
+        var entries: [HistoryEntry] = []
+        for doc in snap.documents {
             let data = doc.data()
             guard let typeRaw = data["type"] as? String,
-                  let type = HistoryType(rawValue: typeRaw) else { return nil }
+                  let type = HistoryType(rawValue: typeRaw) else { continue }
             let kidName = data["kidName"] as? String ?? ""
             let title = data["title"] as? String ?? ""
-            let details = data["details"] as? String ?? ""
             let amount = data["amount"] as? Int ?? 0
             let ts = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date()
-            return HistoryEntry(
-                id: UUID(uuidString: doc.documentID) ?? UUID(),
+            let entryIdSource = (data["entryId"] as? String) ?? doc.documentID
+            let entryUUID = UUID(uuidString: entryIdSource) ?? UUID()
+
+            let entry = HistoryEntry(
+                id: entryUUID,
                 type: type,
                 kidName: kidName,
                 title: title,
-                details: details,
                 amount: amount,
                 timestamp: ts,
                 submissionId: (data["submissionId"] as? String).flatMap(UUID.init(uuidString:)),
-                photoURL: data["photoURL"] as? String
+                photoURL: data["photoURL"] as? String,
+                result: (data["result"] as? String).flatMap(SubmissionStatus.init(rawValue:)),
+                decidedByUid: data["decidedByUid"] as? String,
+                decidedByName: data["decidedByName"] as? String,
+                note: data["note"] as? String,
+                reversedAt: (data["reversedAt"] as? Timestamp)?.dateValue(),
+                reversedByUid: data["reversedByUid"] as? String,
+                reversedByName: data["reversedByName"] as? String,
+                kidId: data["kidId"] as? String
             )
+            entries.append(entry)
+        }
+        return entries
+    }
+
+    func reverseHistoryEntry(
+        familyId: String,
+        entryId: UUID,
+        kidId: String?,
+        kidName: String,
+        delta: Int,
+        reversedByUid: String?,
+        reversedByName: String?
+    ) async throws {
+        let familyRef = db.collection(Collection.families).document(familyId)
+        let historyRef = familyRef.collection(Collection.history).document(entryId.uuidString)
+        let membersRef = familyRef.collection(Collection.members)
+
+        let kidRef: DocumentReference
+        if let kidId, !kidId.isEmpty {
+            kidRef = membersRef.document(kidId)
+        } else {
+            let kidQuery = try await membersRef
+                .whereField("role", isEqualTo: UserRole.kid.rawValue)
+                .whereField("displayName", isEqualTo: kidName)
+                .limit(to: 1)
+                .getDocuments()
+            guard let kidDoc = kidQuery.documents.first else {
+                throw NSError(
+                    domain: "FirebaseFirestoreService",
+                    code: 404,
+                    userInfo: [NSLocalizedDescriptionKey: "Unable to locate kid for reversal."]
+                )
+            }
+            kidRef = kidDoc.reference
+        }
+
+        try await db.runTransaction { txn, errorPointer -> Any? in
+            do {
+                let historySnap = try txn.getDocument(historyRef)
+                guard historySnap.exists else {
+                    throw NSError(
+                        domain: "FirebaseFirestoreService",
+                        code: 404,
+                        userInfo: [NSLocalizedDescriptionKey: "History entry not found."]
+                    )
+                }
+
+                if let existing = historySnap.data()?["reversedAt"], !(existing is NSNull) {
+                    throw NSError(
+                        domain: "FirebaseFirestoreService",
+                        code: 409,
+                        userInfo: [NSLocalizedDescriptionKey: "History entry already reversed."]
+                    )
+                }
+
+                let kidSnap = try txn.getDocument(kidRef)
+                guard kidSnap.exists else {
+                    throw NSError(
+                        domain: "FirebaseFirestoreService",
+                        code: 404,
+                        userInfo: [NSLocalizedDescriptionKey: "Kid entry not found for reversal."]
+                    )
+                }
+
+                txn.updateData([
+                    "coins": FieldValue.increment(Int64(delta)),
+                    "updatedAt": FieldValue.serverTimestamp()
+                ], forDocument: kidRef)
+
+                var updates: [String: Any] = [
+                    "reversedAt": FieldValue.serverTimestamp(),
+                    "kidId": kidRef.documentID
+                ]
+                if let reversedByUid {
+                    updates["reversedByUid"] = reversedByUid
+                }
+                if let reversedByName {
+                    updates["reversedByName"] = reversedByName
+                }
+
+                txn.setData(updates, forDocument: historyRef, merge: true)
+            } catch {
+                errorPointer?.pointee = error as NSError
+            }
+            return nil
         }
     }
 
-    func fetchSubmissions(familyId: String) async throws -> [ChoreSubmission] {
+    func fetchSubmissions(familyId: String) async throws -> [Submission] {
         let familyRef = db.collection(Collection.families).document(familyId)
-        let snap = try await familyRef.collection(Collection.submissions).order(by: "submittedAt", descending: true).getDocuments()
+        let snap = try await familyRef.collection(Collection.submissions)
+            .order(by: "createdAt", descending: true)
+            .getDocuments()
         return snap.documents.compactMap { doc in
             let data = doc.data()
-            let choreId = UUID(uuidString: data["choreId"] as? String ?? "") ?? UUID()
-            let choreName = data["choreName"] as? String ?? ""
+
+            let typeRaw = data["type"] as? String ?? SubmissionKind.chore.rawValue
+            guard let type = SubmissionKind(rawValue: typeRaw) else { return nil }
+
+            let submissionId = UUID(uuidString: doc.documentID) ?? UUID()
+            let kidUid = data["kidUid"] as? String ?? ""
             let kidName = data["kidName"] as? String ?? ""
-            let photoURL = data["photoURL"] as? String ?? ""
-            let submittedAt = (data["submittedAt"] as? Timestamp)?.dateValue() ?? Date()
-            let rewardCoins = data["rewardCoins"] as? Int ?? 0
+            let createdAt = ((data["createdAt"] as? Timestamp) ?? (data["submittedAt"] as? Timestamp))?.dateValue() ?? Date()
             let statusRaw = data["status"] as? String ?? SubmissionStatus.pending.rawValue
             let status = SubmissionStatus(rawValue: statusRaw) ?? .pending
             let reviewedAt = (data["reviewedAt"] as? Timestamp)?.dateValue()
-            let reviewer = data["reviewer"] as? String
-            let rejectionReason = data["rejectionReason"] as? String
-            return ChoreSubmission(
-                id: UUID(uuidString: doc.documentID) ?? UUID(),
-                choreId: choreId,
-                choreName: choreName,
+            let reviewerUid = data["reviewerUid"] as? String
+            let reviewerName = data["reviewerName"] as? String
+            let decisionNote = data["decisionNote"] as? String
+
+            return Submission(
+                id: submissionId,
+                type: type,
+                kidUid: kidUid,
                 kidName: kidName,
-                photoURL: photoURL,
-                submittedAt: submittedAt,
-                rewardCoins: rewardCoins,
+                createdAt: createdAt,
+                choreId: (data["choreId"] as? String).flatMap(UUID.init(uuidString:)),
+                choreName: data["choreName"] as? String,
+                rewardId: (data["rewardId"] as? String).flatMap(UUID.init(uuidString:)),
+                rewardName: data["rewardName"] as? String,
+                rewardCoins: data["rewardCoins"] as? Int,
+                rewardCost: data["rewardCost"] as? Int,
+                storagePath: data["storagePath"] as? String,
+                photoURL: data["photoURL"] as? String,
                 status: status,
                 reviewedAt: reviewedAt,
-                reviewer: reviewer,
-                rejectionReason: rejectionReason
+                reviewerUid: reviewerUid,
+                reviewerName: reviewerName,
+                decisionNote: decisionNote
             )
         }
     }
 
     func updateSubmissionStatus(familyId: String, submissionId: UUID, status: SubmissionStatus, reviewer: String?, rejectionReason: String?) async throws {
-        let familyRef = db.collection(Collection.families).document(familyId)
-        let ref = familyRef.collection(Collection.submissions).document(submissionId.uuidString)
+        guard status != .pending else { return }
+#if canImport(FirebaseFunctions)
+        let callable = functions.httpsCallable("approveOrRejectSubmission")
         var data: [String: Any] = [
-            "status": status.rawValue,
-            "reviewedAt": FieldValue.serverTimestamp()
+            "familyId": familyId,
+            "submissionId": submissionId.uuidString,
+            "decision": status.rawValue
         ]
-        if let reviewer { data["reviewer"] = reviewer }
-        if let rejectionReason { data["rejectionReason"] = rejectionReason }
-        try await ref.setData(data, merge: true)
+        if let reviewer { data["reviewerName"] = reviewer }
+        if let rejectionReason { data["note"] = rejectionReason }
+        _ = try await callable.call(data)
+#else
+        throw NSError(domain: "FirebaseFirestoreService", code: -1, userInfo: [NSLocalizedDescriptionKey: "FirebaseFunctions is not available. Add FirebaseFunctions to the project to review submissions."])
+#endif
     }
 
-    func updateKidCoins(kidName: String, delta: Int, familyId: String) async throws {
+    func updateKidCoins(kidId: String?, kidName: String, delta: Int, familyId: String) async throws {
         let familyRef = db.collection(Collection.families).document(familyId)
-        let kidsRef = familyRef.collection(Collection.kids)
-        // Fetch kids and update first match by name
-        let snap = try await kidsRef.whereField("name", isEqualTo: kidName).limit(to: 1).getDocuments()
-        if let doc = snap.documents.first {
-            let currentCoins = doc.data()["coins"] as? Int ?? 0
-            try await kidsRef.document(doc.documentID).setData([
-                "coins": currentCoins + delta,
-                "updatedAt": FieldValue.serverTimestamp()
-            ], merge: true)
+        let membersRef = familyRef.collection(Collection.members)
+        let targetRef: DocumentReference
+        if let kidId, !kidId.isEmpty {
+            targetRef = membersRef.document(kidId)
+        } else {
+            let querySnap = try await membersRef
+                .whereField("role", isEqualTo: UserRole.kid.rawValue)
+                .whereField("displayName", isEqualTo: kidName)
+                .limit(to: 1)
+                .getDocuments()
+            guard let doc = querySnap.documents.first else { return }
+            targetRef = doc.reference
         }
+
+        let snapshot = try await targetRef.getDocument()
+        guard let data = snapshot.data() else { return }
+        let currentCoins = data["coins"] as? Int ?? 0
+        try await targetRef.setData([
+            "coins": currentCoins + delta,
+            "updatedAt": FieldValue.serverTimestamp()
+        ], merge: true)
+    }
+
+    func cancelPendingSubmission(familyId: String, submissionId: UUID, requesterUid: String) async throws {
+        let familyRef = db.collection(Collection.families).document(familyId)
+        let ref = familyRef.collection(Collection.submissions).document(submissionId.uuidString)
+        let snap = try await ref.getDocument()
+        guard let data = snap.data() else { throw NSError(domain: "FirebaseFirestoreService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Submission not found"]) }
+        let status = data["status"] as? String ?? SubmissionStatus.pending.rawValue
+        let kidUid = data["kidUid"] as? String ?? ""
+        guard status == SubmissionStatus.pending.rawValue else {
+            throw NSError(domain: "FirebaseFirestoreService", code: 409, userInfo: [NSLocalizedDescriptionKey: "Only pending submissions can be cancelled."])
+        }
+        guard kidUid == requesterUid else {
+            throw NSError(domain: "FirebaseFirestoreService", code: 403, userInfo: [NSLocalizedDescriptionKey: "Not authorized to cancel this submission."])
+        }
+        try await ref.delete()
     }
 }
 
@@ -618,15 +814,19 @@ private extension FirebaseFirestoreService {
     }
 
     func fetchKids(familyId: String) async throws -> [Kid] {
-        let snapshot = try await db.collection(Collection.families).document(familyId).collection(Collection.kids).getDocuments()
-        return snapshot.documents.compactMap { document in
+        let familyRef = db.collection(Collection.families).document(familyId)
+        let membersSnap = try await familyRef
+            .collection(Collection.members)
+            .whereField("role", isEqualTo: UserRole.kid.rawValue)
+            .getDocuments()
+        let kids = membersSnap.documents.compactMap { document in
             do {
-                let data = document.data()
-                return try decodeKid(id: document.documentID, data: data)
+                return try decodeKid(id: document.documentID, data: document.data())
             } catch {
                 return nil
             }
         }
+        return kids.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     func fetchChores(familyId: String) async throws -> [Chore] {
@@ -654,7 +854,7 @@ private extension FirebaseFirestoreService {
     }
 
     func decodeKid(id: String, data: [String: Any]) throws -> Kid {
-        let name = data["name"] as? String ?? ""
+        let name = data["displayName"] as? String ?? data["name"] as? String ?? ""
         let colorHex = data["colorHex"] as? String ?? Kid.defaultColorHex
         let coins = data["coins"] as? Int ?? 0
         return Kid(id: id, name: name, colorHex: colorHex, coins: coins)
@@ -669,8 +869,9 @@ private extension FirebaseFirestoreService {
         let punishmentCoins = data["punishmentCoins"] as? Int ?? 0
         let frequencyRaw = data["frequency"] as? String ?? Chore.Frequency.once.rawValue
         let frequency = Chore.Frequency(rawValue: frequencyRaw) ?? .once
+        let paused = data["paused"] as? Bool ?? false
         let icon = data["icon"] as? String ?? "🧹"
-        return Chore(id: UUID(uuidString: id) ?? UUID(), name: name, assignedTo: assignedTo, dueDate: dueDate, rewardCoins: rewardCoins, punishmentCoins: punishmentCoins, frequency: frequency, icon: icon)
+        return Chore(id: UUID(uuidString: id) ?? UUID(), name: name, assignedTo: assignedTo, dueDate: dueDate, rewardCoins: rewardCoins, punishmentCoins: punishmentCoins, frequency: frequency, paused: paused, icon: icon)
     }
 
     func decodeReward(id: String, data: [String: Any]) throws -> Reward {
@@ -700,8 +901,9 @@ final class MockFirestoreService: FirestoreService {
     private var storedInvitesByCode: [String: FamilyInvite] = [:]
     private var storedMembersByFamily: [String: [String: UserRole]] = [:]
 
-    private var storedSubmissionsByFamily: [String: [ChoreSubmission]] = [:]
+    private var storedSubmissionsByFamily: [String: [Submission]] = [:]
     private var storedHistoryByFamily: [String: [HistoryEntry]] = [:]
+    private var reversedHistoryEntryIdsByFamily: [String: Set<UUID>] = [:]
 
     func fetchUserProfile(uid: String) async throws -> UserProfile? {
         storedProfiles[uid]
@@ -883,7 +1085,7 @@ final class MockFirestoreService: FirestoreService {
         }
     }
 
-    func addChoreSubmission(_ submission: ChoreSubmission, familyId: String) async throws {
+    func createSubmission(_ submission: Submission, familyId: String) async throws {
         var list = storedSubmissionsByFamily[familyId] ?? []
         list.append(submission)
         storedSubmissionsByFamily[familyId] = list
@@ -899,30 +1101,149 @@ final class MockFirestoreService: FirestoreService {
         return (storedHistoryByFamily[familyId] ?? []).sorted { $0.timestamp > $1.timestamp }
     }
 
-    func fetchSubmissions(familyId: String) async throws -> [ChoreSubmission] {
-        return (storedSubmissionsByFamily[familyId] ?? []).sorted { $0.submittedAt > $1.submittedAt }
+    func reverseHistoryEntry(
+        familyId: String,
+        entryId: UUID,
+        kidId: String?,
+        kidName: String,
+        delta: Int,
+        reversedByUid: String?,
+        reversedByName: String?
+    ) async throws {
+        guard var history = storedHistoryByFamily[familyId] else {
+            throw NSError(domain: "MockFirestoreService", code: 404, userInfo: [NSLocalizedDescriptionKey: "History not found for family."])
+        }
+        guard let entryIndex = history.firstIndex(where: { $0.id == entryId }) else {
+            throw NSError(domain: "MockFirestoreService", code: 404, userInfo: [NSLocalizedDescriptionKey: "History entry not found."])
+        }
+        let existing = history[entryIndex]
+        if let reversedSet = reversedHistoryEntryIdsByFamily[familyId], reversedSet.contains(entryId) {
+            throw NSError(domain: "MockFirestoreService", code: 409, userInfo: [NSLocalizedDescriptionKey: "History entry already reversed."])
+        }
+
+        guard var snapshot = storedFamilyData[familyId] else {
+            throw NSError(domain: "MockFirestoreService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Family snapshot not found."])
+        }
+
+        let resolvedKidId: String?
+        if let kidId, !kidId.isEmpty {
+            resolvedKidId = kidId
+        } else {
+            resolvedKidId = snapshot.kids.first(where: { $0.name == kidName })?.id
+        }
+
+        guard let finalKidId = resolvedKidId,
+              let kidIndex = snapshot.kids.firstIndex(where: { $0.id == finalKidId }) else {
+            throw NSError(domain: "MockFirestoreService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Kid not found for reversal."])
+        }
+
+        var kid = snapshot.kids[kidIndex]
+        kid.coins += delta
+        snapshot.kids[kidIndex] = kid
+        storedFamilyData[familyId] = snapshot
+
+        var reversedSet = reversedHistoryEntryIdsByFamily[familyId] ?? Set<UUID>()
+        reversedSet.insert(entryId)
+        reversedHistoryEntryIdsByFamily[familyId] = reversedSet
+
+        let updated = HistoryEntry(
+            id: existing.id,
+            type: existing.type,
+            kidName: existing.kidName,
+            title: existing.title,
+            amount: existing.amount,
+            timestamp: existing.timestamp,
+            submissionId: existing.submissionId,
+            photoURL: existing.photoURL,
+            result: existing.result,
+            decidedByUid: existing.decidedByUid,
+            decidedByName: existing.decidedByName,
+            note: existing.note,
+            reversedAt: Date(),
+            reversedByUid: reversedByUid,
+            reversedByName: reversedByName,
+            kidId: finalKidId
+        )
+
+        history[entryIndex] = updated
+        storedHistoryByFamily[familyId] = history
+    }
+
+    func fetchSubmissions(familyId: String) async throws -> [Submission] {
+        return (storedSubmissionsByFamily[familyId] ?? []).sorted { $0.createdAt > $1.createdAt }
     }
 
     func updateSubmissionStatus(familyId: String, submissionId: UUID, status: SubmissionStatus, reviewer: String?, rejectionReason: String?) async throws {
+        guard status != .pending else { return }
         var list = storedSubmissionsByFamily[familyId] ?? []
-        if let idx = list.firstIndex(where: { $0.id == submissionId }) {
-            var item = list[idx]
-            item.status = status
-            item.reviewedAt = Date()
-            item.reviewer = reviewer
-            item.rejectionReason = rejectionReason
-            list[idx] = item
-            storedSubmissionsByFamily[familyId] = list
+        guard let idx = list.firstIndex(where: { $0.id == submissionId }) else { return }
+
+        var submission = list.remove(at: idx)
+        submission.status = status
+        submission.reviewedAt = Date()
+        submission.reviewerName = reviewer
+        submission.decisionNote = rejectionReason
+        storedSubmissionsByFamily[familyId] = list
+
+        var history = storedHistoryByFamily[familyId] ?? []
+
+        let now = Date()
+        var amount = 0
+
+        switch submission.type {
+        case .chore:
+            let coins = submission.rewardCoins ?? 0
+            if status == .approved {
+                amount = coins
+                try await updateKidCoins(kidId: submission.kidUid, kidName: submission.kidName, delta: coins, familyId: familyId)
+            }
+        case .reward:
+            let cost = submission.rewardCost ?? 0
+            if status == .approved {
+                amount = -cost
+                try await updateKidCoins(kidId: submission.kidUid, kidName: submission.kidName, delta: -cost, familyId: familyId)
+            }
         }
+
+        let entry = HistoryEntry(
+            type: submission.type == .chore ? .choreCompleted : .rewardRedeemed,
+            kidName: submission.kidName,
+            title: submission.displayTitle,
+            amount: amount,
+            timestamp: now,
+            submissionId: submission.id,
+            photoURL: submission.photoURL,
+            result: status,
+            decidedByName: reviewer,
+            note: (status == .rejected ? (rejectionReason ?? "Parent declined") : (submission.type == .reward && status == .approved ? "Reward fulfilled" : (submission.type == .chore && status == .approved ? "Approved by \(reviewer ?? "Parent")" : nil)))
+        )
+        history.append(entry)
+        storedHistoryByFamily[familyId] = history
     }
 
-    func updateKidCoins(kidName: String, delta: Int, familyId: String) async throws {
+    func updateKidCoins(kidId: String?, kidName: String, delta: Int, familyId: String) async throws {
         guard var snapshot = storedFamilyData[familyId] else { return }
-        if let idx = snapshot.kids.firstIndex(where: { $0.name == kidName }) {
+        let targetIndex: Int?
+        if let kidId, let idx = snapshot.kids.firstIndex(where: { $0.id == kidId }) {
+            targetIndex = idx
+        } else {
+            targetIndex = snapshot.kids.firstIndex(where: { $0.name == kidName })
+        }
+        if let idx = targetIndex {
             var kid = snapshot.kids[idx]
             kid.coins += delta
             snapshot.kids[idx] = kid
             storedFamilyData[familyId] = snapshot
+        }
+    }
+
+    func cancelPendingSubmission(familyId: String, submissionId: UUID, requesterUid: String) async throws {
+        var list = storedSubmissionsByFamily[familyId] ?? []
+        if let idx = list.firstIndex(where: { $0.id == submissionId && $0.status == .pending && $0.kidUid == requesterUid }) {
+            list.remove(at: idx)
+            storedSubmissionsByFamily[familyId] = list
+        } else {
+            throw NSError(domain: "MockFirestoreService", code: 404, userInfo: [NSLocalizedDescriptionKey: "Pending submission not found or not owned by requester."])
         }
     }
 

@@ -44,6 +44,7 @@ struct ChoreRow: View {
             }
         }
         .appRowBackground(color: rowBackground)
+        .opacity(chore.paused ? 0.6 : 1.0)
         .contentShape(Rectangle())
         #if os(iOS)
         .hoverEffect(.lift)
@@ -85,6 +86,10 @@ struct ChoreRow: View {
             Label(assignee, systemImage: "person")
             Divider().frame(height: 12)
             Label(dateText, systemImage: "calendar")
+            if chore.paused {
+                Divider().frame(height: 12)
+                Label("Paused", systemImage: "pause.circle")
+            }
         }
         .font(.subheadline)
         .foregroundStyle(.secondary)
@@ -111,13 +116,31 @@ struct ChoreRow: View {
 }
 
 #if DEBUG
+@available(iOS 17.0, macOS 14.0, tvOS 17.0, watchOS 10.0, *)
 #Preview("Chore Row", traits: .sizeThatFitsLayout) {
     ChoreRow(chore: .preview)
         .padding()
 }
 
+@available(iOS 17.0, macOS 14.0, tvOS 17.0, watchOS 10.0, *)
 #Preview("Chore Row Selecting", traits: .sizeThatFitsLayout) {
     ChoreRow(chore: .preview, isSelecting: true, isSelected: true)
         .padding()
+}
+
+// Fallback previews for earlier OS versions
+struct ChoreRow_Previews: PreviewProvider {
+    static var previews: some View {
+        Group {
+            ChoreRow(chore: .preview)
+                .padding()
+                .previewDisplayName("Chore Row")
+
+            ChoreRow(chore: .preview, isSelecting: true, isSelected: true)
+                .padding()
+                .previewDisplayName("Chore Row Selecting")
+        }
+        .previewLayout(.sizeThatFits)
+    }
 }
 #endif

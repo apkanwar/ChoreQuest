@@ -10,10 +10,28 @@ struct ParentHistoryView: View {
     @State private var isLoading = false
     @State private var selectedPage: Int = 0
 
-    @State private var submissions: [ChoreSubmission] = []
+    @State private var submissions: [Submission] = []
 
     @State private var selectedPhotoURL: URL?
     @State private var isShowingPhoto = false
+    @State private var entryPendingReversal: HistoryEntry?
+    @State private var showReversalAlert = false
+    @State private var showToast = false
+    @State private var toastMessage = ""
+
+    private let isPreview: Bool
+
+    init(
+        previewEntries: [HistoryEntry] = [],
+        previewSubmissions: [Submission] = [],
+        selectedPage: Int = 0,
+        enablePreviewMode: Bool = false
+    ) {
+        self.isPreview = enablePreviewMode
+        _entries = State(initialValue: previewEntries)
+        _submissions = State(initialValue: previewSubmissions)
+        _selectedPage = State(initialValue: selectedPage)
+    }
 
     var body: some View {
         NavigationStack {
@@ -36,9 +54,9 @@ struct ParentHistoryView: View {
             }
             .alert(
                 "Error",
-                isPresented: Binding(get: { session.errorMessage != nil }, set: { if !$0 { session.errorMessage = nil } })
+                isPresented: errorBinding
             ) {
-                Button("OK", role: .cancel) {}
+                Button("OK", role: .cancel) { session.errorMessage = nil }
             } message: {
                 Text(session.errorMessage ?? "Unknown error")
             }
@@ -62,8 +80,38 @@ struct ParentHistoryView: View {
                     }
                 }
             }
-            .task { await reloadAll() }
-            .refreshable { await reloadAll() }
+            .alert("Reverse entry?", isPresented: $showReversalAlert) {
+                Button("No", role: .cancel) { entryPendingReversal = nil }
+                Button("Yes") {
+                    guard let entry = entryPendingReversal else { return }
+                    let delta = -entry.amount
+                    Task {
+                        let success = await session.reverseHistoryEntry(entry)
+                        if success {
+                            await reloadAll()
+                            await MainActor.run {
+                                toastMessage = reversalToastMessage(for: entry.kidName, delta: delta)
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) { showToast = true }
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                                withAnimation(.easeInOut(duration: 0.25)) { showToast = false }
+                            }
+                        }
+                    }
+                    entryPendingReversal = nil
+                }
+            } message: {
+                Text("Are you sure you want to reverse this history entry?")
+            }
+            .task { if !isPreview { await reloadAll() } }
+            .refreshable { if !isPreview { await reloadAll() } }
+            .overlay(alignment: .top) {
+                if showToast {
+                    toastView
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .padding()
+                }
+            }
         }
     }
 }
@@ -92,7 +140,7 @@ private extension ParentHistoryView {
                             onApprove: { approve(sub) },
                             onReject: { reject(sub) },
                             onTapPhoto: {
-                                if let url = URL(string: sub.photoURL) {
+                                if let urlString = sub.photoURL, let url = URL(string: urlString) {
                                     selectedPhotoURL = url
                                     isShowingPhoto = true
                                 }
@@ -122,12 +170,19 @@ private extension ParentHistoryView {
                 ScrollView {
                     LazyVStack(spacing: AppSpacing.section) {
                         ForEach(filteredEntries) { entry in
-                            HistoryEntryRowView(entry: entry) {
-                                if let urlString = entry.photoURL, let url = URL(string: urlString) {
-                                    selectedPhotoURL = url
-                                    isShowingPhoto = true
-                                }
-                            }
+                            HistoryEntryRowView(
+                                entry: entry,
+                                onTapPhoto: {
+                                    if let urlString = entry.photoURL, let url = URL(string: urlString) {
+                                        selectedPhotoURL = url
+                                        isShowingPhoto = true
+                                    }
+                                },
+                                onReversePenalty: canReverse(entry) ? {
+                                    entryPendingReversal = entry
+                                    showReversalAlert = true
+                                } : nil
+                            )
                         }
                     }
                 }
@@ -167,6 +222,39 @@ private extension ParentHistoryView {
         }
     }
 
+    private var errorBinding: Binding<Bool> {
+        Binding(
+            get: { session.errorMessage != nil },
+            set: { if !$0 { session.errorMessage = nil } }
+        )
+    }
+
+    func canReverse(_ entry: HistoryEntry) -> Bool {
+        guard session.profile?.role == .parent else { return false }
+        guard !entry.isReversed else { return false }
+        switch entry.type {
+        case .choreCompleted, .rewardRedeemed:
+            if let result = entry.result {
+                return result != .pending
+            }
+            return true
+        case .choreMissed:
+            return true
+        case .penaltyReversed:
+            return false
+        }
+    }
+
+    func reversalToastMessage(for kidName: String, delta: Int) -> String {
+        if delta > 0 {
+            return "Gave back \(delta) stars to \(kidName)"
+        } else if delta < 0 {
+            return "Removed \(abs(delta)) stars from \(kidName)"
+        } else {
+            return "Reversed entry for \(kidName)"
+        }
+    }
+
     func reloadAll() async {
         await MainActor.run { isLoading = true }
         async let historyTask = session.fetchHistory()
@@ -179,34 +267,125 @@ private extension ParentHistoryView {
         }
     }
 
-    func fetchSubmissions() async -> [ChoreSubmission] {
+    func fetchSubmissions() async -> [Submission] {
         await session.fetchSubmissions()
     }
 
-    func approve(_ sub: ChoreSubmission) {
+    func approve(_ sub: Submission) {
         Task {
             await session.approveSubmission(sub)
             await reloadAll()
         }
     }
 
-    func reject(_ sub: ChoreSubmission) {
+    func reject(_ sub: Submission) {
         Task {
             await session.rejectSubmission(sub)
             await reloadAll()
         }
     }
+
+    var toastView: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            Text(toastMessage)
+                .font(.headline)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(radius: 4)
+    }
 }
 
 private struct SubmissionRowView: View {
-    let sub: ChoreSubmission
+    let sub: Submission
     let onApprove: () -> Void
     let onReject: () -> Void
     let onTapPhoto: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            AsyncImage(url: URL(string: sub.photoURL)) { image in
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                submissionMedia
+                
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(sub.displayTitle)
+                            .font(.headline)
+                        Spacer()
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(sub.kidName, systemImage: "person")
+                        Label(sub.createdAt.formatted(date: .numeric, time: .shortened), systemImage: "calendar")
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    
+                    HStack(spacing: 8) {
+                        Label(sub.type.displayName, systemImage: sub.type == .chore ? "checkmark.seal" : "gift")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(Color(.secondarySystemBackground), in: Capsule())
+                        if let delta = sub.pointsDeltaOnApproval {
+                            Label(delta >= 0 ? "+\(delta)" : "\(delta)", systemImage: "star.circle")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Capsule().fill((delta >= 0 ? Color.green : Color.red).opacity(0.25)))
+                        }
+                    }
+                    if let reviewer = sub.reviewerName, let reviewedAt = sub.reviewedAt {
+                        Text("Reviewed by \(reviewer) • \(reviewedAt.formatted(date: .numeric, time: .shortened))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let note = sub.decisionNote, !note.isEmpty {
+                        Text("Note: \(note)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if sub.status == .pending {
+                HStack {
+                    Button(role: .destructive, action: onReject) {
+                        Label("Reject", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+
+                    Button(action: onApprove) {
+                        Label("Approve", systemImage: "checkmark.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+        .padding(8)
+        .appRowBackground(color: Color(.systemBackground))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(statusColor, lineWidth: 1.5)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard sub.hasPhoto else { return }
+            onTapPhoto()
+        }
+    }
+
+    @ViewBuilder
+    private var submissionMedia: some View {
+        if let urlString = sub.photoURL, let url = URL(string: urlString) {
+            AsyncImage(url: url) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 ProgressView()
@@ -214,52 +393,21 @@ private struct SubmissionRowView: View {
             .frame(width: 64, height: 64)
             .clipped()
             .cornerRadius(8)
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(sub.choreName)
-                        .font(.headline)
-                    Spacer()
-                    Text(sub.status.displayName)
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(statusColor.opacity(0.2))
-                        .clipShape(Capsule())
-                }
-                Text("\(sub.kidName) • \(sub.submittedAt.formatted(date: .numeric, time: .shortened))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let reviewer = sub.reviewer, let reviewedAt = sub.reviewedAt {
-                    Text("Reviewed by \(reviewer) • \(reviewedAt.formatted(date: .numeric, time: .shortened))")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                if let reason = sub.rejectionReason, !reason.isEmpty {
-                    Text("Reason: \(reason)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if sub.status == .pending {
-                    HStack {
-                        Button(role: .destructive, action: onReject) {
-                            Label("Reject", systemImage: "xmark.circle")
-                        }
-                        .buttonStyle(.bordered)
-
-                        Spacer()
-
-                        Button(action: onApprove) {
-                            Label("Approve", systemImage: "checkmark.circle")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
+        } else {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+                if sub.type == .chore {
+                    Image(systemName: "photo")
+                        .foregroundStyle(Color.secondary)
+                } else {
+                    Text("🎁")
+                        .font(.title2)
+                        .foregroundStyle(Color.secondary)
                 }
             }
+            .frame(width: 64, height: 64)
         }
-        .appRowBackground(color: Color(.systemBackground))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onTapPhoto)
     }
 
     private var statusColor: Color {
@@ -274,39 +422,118 @@ private struct SubmissionRowView: View {
 private struct HistoryEntryRowView: View {
     let entry: HistoryEntry
     let onTapPhoto: () -> Void
+    var onReversePenalty: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(entry.type == .choreCompleted ? "✅" : "🎁")
+                Text(entryIcon)
                 Text(entry.title)
                     .font(.headline)
                 Spacer()
-                Text(String(format: "%@%d", entry.amount >= 0 ? "+" : "", entry.amount))
-                    .foregroundStyle(entry.amount >= 0 ? .green : .red)
-                    .monospacedDigit()
+                amountBadge
             }
-            Text("\(entry.kidName) • \(entry.timestamp.formatted(date: .numeric, time: .shortened))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if !entry.details.isEmpty {
-                Text(entry.details)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Label(entry.kidName, systemImage: "person")
+                Label(formattedDate(entry.timestamp), systemImage: "calendar")
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            if let result = entry.result {
+                Text(resultText(result))
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(resultColor(result).opacity(0.18))
+                    .foregroundStyle(resultColor(result))
+                    .clipShape(Capsule())
+            }
+            if entry.isReversed {
+                Text("Reversed")
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.blue.opacity(0.18))
+                    .foregroundStyle(Color.blue)
+                    .clipShape(Capsule())
+            }
+            if let onReversePenalty, !entry.isReversed {
+                HStack {
+                    Button(action: onReversePenalty) {
+                        Label("Give Back", systemImage: "arrow.uturn.left")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
         }
+        .padding(8)
         .appRowBackground(color: Color(.systemBackground))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(borderColor, lineWidth: 1.5)
+        )
         .contentShape(Rectangle())
-        .onTapGesture(perform: onTapPhoto)
+        .onTapGesture {
+            guard entry.photoURL != nil else { return }
+            onTapPhoto()
+        }
     }
-}
 
-#if DEBUG
-#Preview("Parent History") {
-    let session = AppSessionViewModel.previewParentSession()
-    let familyVM = FamilyViewModel(kids: [Kid(name: "Kenny Kid", coins: 12)])
-    ParentHistoryView()
-        .environmentObject(session)
-        .environmentObject(familyVM)
+    private func resultColor(_ result: SubmissionStatus) -> Color {
+        switch result {
+        case .pending: return .yellow
+        case .approved: return .green
+        case .rejected: return .red
+        }
+    }
+    
+    private func resultText(_ result: SubmissionStatus) -> String {
+        switch result {
+        case .approved:
+            return "Approved by \(entry.decidedByName ?? "Parent")"
+        case .rejected:
+            return "Rejected by \(entry.decidedByName ?? "Parent")"
+        case .pending:
+            return "Pending"
+        }
+    }
+
+    private var entryIcon: String {
+        switch entry.type {
+        case .choreCompleted: return "✅"
+        case .choreMissed: return "⚠️"
+        case .rewardRedeemed: return "🎁"
+        case .penaltyReversed: return "↩️"
+        }
+    }
+
+    private var amountBadge: some View {
+        let isPositive = entry.amount >= 0
+        return Label(isPositive ? "+\(entry.amount)" : "\(entry.amount)", systemImage: "star.circle")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill((isPositive ? Color.green : Color.red).opacity(0.25)))
+    }
+    
+    private var borderColor: Color {
+        if let result = entry.result {
+            return resultColor(result)
+        } else {
+            return entry.amount >= 0 ? .green : .red
+        }
+    }
+
+    private func formattedDate(_ date: Date) -> String {
+        return HistoryEntryRowView.dateFormatter.string(from: date)
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "MMM dd, yyyy, h:mm a"
+        return df
+    }()
 }
-#endif

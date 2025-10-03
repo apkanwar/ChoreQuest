@@ -41,6 +41,7 @@ private extension EditChoreSheet {
                     Text(freq.displayName).tag(freq)
                 }
             }
+            Toggle("Paused", isOn: $draft.paused)
             iconPicker
         }
     }
@@ -150,7 +151,7 @@ private extension EditChoreSheet {
         }
     }
 
-    @ToolbarContentBuilder
+        @ToolbarContentBuilder
     var toolbar: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
             Button("Cancel") { dismiss() }

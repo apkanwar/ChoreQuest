@@ -1,2 +1,6 @@
 # Firebase configuration file
-GoogleService-Info.plist
+/GoogleService-Info.plist
+
+/firebase
+/firebase-debug.log
+/firebase.json

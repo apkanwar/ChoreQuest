@@ -13,7 +13,6 @@ struct KidMainView: View {
             NavigationStack {
                 KidRewardsScreen()
             }
-            .toolbarBackground(.hidden, for: .navigationBar)
             .tabItem {
                 Label("Rewards", systemImage: "gift")
             }

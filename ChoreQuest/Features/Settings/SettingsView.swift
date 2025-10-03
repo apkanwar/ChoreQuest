@@ -23,6 +23,9 @@ struct SettingsView: View {
                 if session.currentFamily != nil && session.profile?.role == .parent {
                     invitesSection
                 }
+                if session.currentFamily != nil && session.profile?.role == .parent {
+                    vacationSection
+                }
                 actionsSection
             }
             .navigationTitle("Settings")
@@ -107,6 +110,17 @@ private extension SettingsView {
             } else {
                 Text("You aren’t part of a family yet.")
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+    
+    var vacationSection: some View {
+        Section("Vacation") {
+            Toggle(isOn: Binding(
+                get: { session.allChoresPaused },
+                set: { newValue in session.setAllChoresPaused(newValue) }
+            )) {
+                Label("Pause All Chores", systemImage: "pause.circle")
             }
         }
     }

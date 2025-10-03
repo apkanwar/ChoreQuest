@@ -148,7 +148,7 @@ private extension AddChoreSheet {
         }
     }
 
-    @ToolbarContentBuilder
+        @ToolbarContentBuilder
     var toolbar: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
             Button("Cancel") { dismiss() }

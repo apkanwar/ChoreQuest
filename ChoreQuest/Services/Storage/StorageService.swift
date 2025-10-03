@@ -16,6 +16,7 @@ enum StorageError: LocalizedError {
 
 protocol StorageService {
     func upload(data: Data, to path: String, contentType: String?) async throws -> URL
+    func delete(path: String) async throws
 }
 
 struct StorageServiceFactory {
@@ -41,11 +42,28 @@ struct FirebaseStorageService: StorageService {
         _ = try await reference.putDataAsync(data, metadata: metadata)
         return try await reference.downloadURL()
     }
+
+    func delete(path: String) async throws {
+        let reference = storage.reference(withPath: path)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            reference.delete { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
+    }
 }
 #else
 
 struct FirebaseStorageService: StorageService {
     func upload(data: Data, to path: String, contentType: String?) async throws -> URL {
+        throw StorageError.notConfigured
+    }
+
+    func delete(path: String) async throws {
         throw StorageError.notConfigured
     }
 }
@@ -58,5 +76,10 @@ struct MockStorageService: StorageService {
         try? FileManager.default.createDirectory(at: tempURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: tempURL)
         return tempURL
+    }
+
+    func delete(path: String) async throws {
+        let tempURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(path)
+        try? FileManager.default.removeItem(at: tempURL)
     }
 }

@@ -22,14 +22,21 @@ struct AppRootView: View {
             }
         }
         .animation(.easeInOut, value: session.state)
-        .overlay(alignment: .bottom) {
+        .disabled(session.isProcessing)
+        .overlay {
             if session.isProcessing {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .padding()
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .padding()
+                ZStack {
+                    Color.black.opacity(0.2)
+                        .ignoresSafeArea()
+                    ProgressView("Processing...")
+                        .progressViewStyle(.circular)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(.thinMaterial)
+                        )
+                }
             }
         }
         .alert(isPresented: Binding(get: { session.errorMessage != nil }, set: { _ in session.errorMessage = nil })) {

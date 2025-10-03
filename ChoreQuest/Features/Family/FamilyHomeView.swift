@@ -5,7 +5,6 @@ struct FamilyHomeView: View {
     @EnvironmentObject private var session: AppSessionViewModel
 
     @State private var selectedKid: Kid?
-    @State private var isPresentingAddKid = false
     @State private var isPresentingSettings = false
     @State private var isPresentingNotifications = false
 
@@ -16,15 +15,9 @@ struct FamilyHomeView: View {
                     selectedKid = kid
                 }
             }
-            .overlay(alignment: .top) {
-                addKidHeaderOverlay
-            }
             .refreshable { await refreshFamily() }
             .sheet(item: $selectedKid) { kid in
                 EditKidSheet(kid: kid, viewModel: viewModel)
-            }
-            .sheet(isPresented: $isPresentingAddKid) {
-                AddKidSheet(viewModel: viewModel)
             }
             .sheet(isPresented: $isPresentingSettings) {
                 FamilySettingsView()
@@ -52,36 +45,6 @@ struct FamilyHomeView: View {
 }
 
 private extension FamilyHomeView {
-    var addKidHeaderOverlay: some View {
-        HStack {
-            Spacer()
-            Button { isPresentingAddKid = true } label: {
-                let base = Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.black)
-                    .frame(width: 44, height: 44)
-
-                if #available(iOS 18.0, macOS 15.0, *) {
-                    base.glassEffect(.regular.interactive(), in: .circle)
-                } else {
-                    base
-                        .background(
-                            Circle()
-                                .fill(Color(.systemBackground))
-                        )
-                }
-            }
-            .accessibilityLabel("Add Kid")
-            #if os(iOS)
-            .hoverEffect(.lift)
-            #endif
-        }
-        .frame(maxWidth: AppLayout.maxContentWidth)
-        .padding(.horizontal, AppSpacing.screenPadding)
-        .padding(.vertical, 100)
-        .frame(maxWidth: .infinity, alignment: .center)
-    }
-
     func refreshFamily() async {
         session.loadFamilyIfNeeded()
     }

@@ -50,14 +50,6 @@ final class ChoresViewModel: ObservableObject {
         }
     }
 
-    func addKid(_ name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        if !availableKids.contains(trimmed) {
-            availableKids.append(trimmed)
-        }
-    }
-
     func renameKid(from oldName: String, to newName: String) {
         let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !oldName.isEmpty, !trimmedNew.isEmpty else { return }
@@ -87,4 +79,3 @@ final class ChoresViewModel: ObservableObject {
         return ordered + extras.sorted()
     }
 }
-

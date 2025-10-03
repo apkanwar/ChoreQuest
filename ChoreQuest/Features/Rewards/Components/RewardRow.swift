@@ -85,13 +85,16 @@ struct RewardRow: View {
 }
 
 #if DEBUG
+@available(iOS 17.0, *)
 #Preview("Reward Row", traits: .sizeThatFitsLayout) {
     RewardRow(reward: .preview)
         .padding()
 }
 
+@available(iOS 17.0, *)
 #Preview("Reward Row Selecting", traits: .sizeThatFitsLayout) {
     RewardRow(reward: .preview, isSelecting: true, isSelected: true)
         .padding()
 }
 #endif
+

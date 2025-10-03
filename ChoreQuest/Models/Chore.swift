@@ -9,6 +9,7 @@ struct Chore: Identifiable, Hashable, Codable {
     var rewardCoins: Int
     var punishmentCoins: Int
     var frequency: Frequency
+    var paused: Bool
     var icon: String
 
     init(
@@ -19,6 +20,7 @@ struct Chore: Identifiable, Hashable, Codable {
         rewardCoins: Int,
         punishmentCoins: Int,
         frequency: Frequency,
+        paused: Bool = false,
         icon: String = "🧹"
     ) {
         self.id = id
@@ -28,6 +30,7 @@ struct Chore: Identifiable, Hashable, Codable {
         self.rewardCoins = rewardCoins
         self.punishmentCoins = punishmentCoins
         self.frequency = frequency
+        self.paused = paused
         self.icon = icon
     }
 
@@ -52,6 +55,7 @@ extension Chore {
         rewardCoins: 10,
         punishmentCoins: 5,
         frequency: .daily,
+        paused: false,
         icon: "🛏️"
     )
 
@@ -64,6 +68,7 @@ extension Chore {
             rewardCoins: 8,
             punishmentCoins: 5,
             frequency: .weekly,
+            paused: false,
             icon: "🗑️"
         ),
         Chore(
@@ -73,6 +78,7 @@ extension Chore {
             rewardCoins: 12,
             punishmentCoins: 6,
             frequency: .daily,
+            paused: false,
             icon: "📚"
         )
     ]

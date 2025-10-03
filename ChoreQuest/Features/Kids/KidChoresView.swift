@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import Combine
 
 struct KidChoresView: View {
     @EnvironmentObject private var session: AppSessionViewModel
@@ -7,9 +8,14 @@ struct KidChoresView: View {
     @EnvironmentObject private var familyVM: FamilyViewModel
 
     @State private var isUploading = false
+    @State private var uploadingChoreId: UUID?
     @State private var errorMessage: String?
     @State private var isPresentingNotifications = false
     @State private var isPresentingSettings = false
+    @State private var submittedChoreIDs: Set<UUID> = []
+    @State private var isRefreshingSubmissions = false
+
+    private let submissionsRefresh = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
     var body: some View {
         AppScreen {
@@ -61,6 +67,10 @@ struct KidChoresView: View {
         .sheet(isPresented: $isPresentingSettings) {
             SettingsView()
         }
+        .onReceive(submissionsRefresh) { _ in
+            Task { await refreshSubmitted() }
+        }
+        .task { await refreshSubmitted() }
     }
 }
 
@@ -88,7 +98,12 @@ private extension KidChoresView {
         VStack(alignment: .leading, spacing: AppSpacing.section) {
             AppSectionHeader(title: "My Chores")
             ForEach(assignedChores) { chore in
-                KidChoreRow(chore: chore, isUploading: isUploading) { item in
+                KidChoreRow(
+                    chore: chore,
+                    isUploading: isUploading,
+                    isSubmitting: uploadingChoreId == chore.id,
+                    isSubmitted: submittedChoreIDs.contains(chore.id)
+                ) { item in
                     Task { await submit(chore: chore, with: item) }
                 }
             }
@@ -103,7 +118,8 @@ private extension KidChoresView {
     var assignedChores: [Chore] {
         choresVM.chores.filter { chore in
             let target = kidName.lowercased()
-            return chore.assignedTo.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.contains(target)
+            let isAssigned = chore.assignedTo.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.contains(target)
+            return isAssigned && !chore.paused
         }
     }
 
@@ -116,25 +132,65 @@ private extension KidChoresView {
         Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
     }
 
+    func refreshSubmitted() async {
+        var shouldSkip = false
+        await MainActor.run {
+            if self.isRefreshingSubmissions {
+                shouldSkip = true
+            } else {
+                self.isRefreshingSubmissions = true
+            }
+        }
+        if shouldSkip { return }
+
+        guard let kidUid = session.profile?.id else {
+            await MainActor.run { self.isRefreshingSubmissions = false }
+            return
+        }
+        let submissions = await session.fetchSubmissions()
+        let ids: [UUID] = submissions
+            .filter { $0.type == .chore && $0.kidUid == kidUid && $0.status == .pending }
+            .compactMap { $0.choreId }
+        await MainActor.run {
+            self.submittedChoreIDs = Set(ids)
+            self.isRefreshingSubmissions = false
+        }
+    }
+
     func submit(chore: Chore, with item: PhotosPickerItem) async {
         guard let profile = session.profile, profile.familyId != nil else { return }
         guard let data = try? await item.loadTransferable(type: Data.self) else {
             await MainActor.run { self.errorMessage = "Could not read selected photo." }
             return
         }
-        await MainActor.run { self.isUploading = true }
+        await MainActor.run {
+            self.isUploading = true
+            self.uploadingChoreId = chore.id
+        }
         await session.submitChoreEvidence(chore: chore, photoData: data)
-        await MainActor.run { self.isUploading = false }
+        _ = await MainActor.run { self.submittedChoreIDs.insert(chore.id) }
+        await refreshSubmitted()
+        await MainActor.run {
+            self.isUploading = false
+            self.uploadingChoreId = nil
+        }
     }
 }
 
 private struct KidChoreRow: View {
     let chore: Chore
     let isUploading: Bool
+    let isSubmitting: Bool
+    let isSubmitted: Bool
     let onSubmit: (PhotosPickerItem) -> Void
 
     @State private var selectedItem: PhotosPickerItem?
 
+    private var buttonTitle: String {
+        if isSubmitted { return "Submitted" }
+        if isSubmitting { return "Submitting..." }
+        return "Submit"
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -154,14 +210,15 @@ private struct KidChoreRow: View {
             }
             Spacer()
             PhotosPicker(selection: $selectedItem, matching: .images, photoLibrary: .shared()) {
-                Text("Submit")
+                Text(buttonTitle)
                     .bold()
             }
             .buttonStyle(.borderedProminent)
-            .disabled(isUploading)
+            .disabled(isUploading || isSubmitted || isSubmitting)
             .onChange(of: selectedItem) { _, newItem in
                 if let item = newItem {
                     onSubmit(item)
+                    selectedItem = nil
                 }
             }
         }

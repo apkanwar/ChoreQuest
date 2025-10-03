@@ -7,8 +7,7 @@ struct AppRootView: View {
         Group {
             switch session.state {
             case .loading:
-                ProgressView("Loading...")
-                    .progressViewStyle(.circular)
+                SplashView()
             case .unauthenticated:
                 AuthenticationView()
             case let .profileSetup(user):

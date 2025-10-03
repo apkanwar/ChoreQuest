@@ -26,6 +26,7 @@ struct SettingsView: View {
                 if session.currentFamily != nil && session.profile?.role == .parent {
                     vacationSection
                 }
+                aboutSection
                 actionsSection
             }
             .navigationTitle("Settings")
@@ -121,6 +122,16 @@ private extension SettingsView {
                 set: { newValue in session.setAllChoresPaused(newValue) }
             )) {
                 Label("Pause All Chores", systemImage: "pause.circle")
+            }
+        }
+    }
+    
+    var aboutSection: some View {
+        Section("About") {
+            NavigationLink {
+                AboutView()
+            } label: {
+                Label("About", systemImage: "info.circle")
             }
         }
     }

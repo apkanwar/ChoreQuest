@@ -24,19 +24,38 @@ struct AuthenticationView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(FilledRoundedButtonStyle(background: .black, foreground: .white))
+                .disabled(true)
 
                 Button(action: session.signInWithGoogle) {
-                    HStack {
-                        Image(systemName: "globe")
-                            .font(.headline)
-                        Spacer()
+                    Label {
                         Text("Continue with Google")
-                            .font(.headline)
-                        Spacer()
+                    } icon: {
+                        Image("google")
+                            .renderingMode(.original)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 20, height: 20)
                     }
+                    .font(.headline)
                     .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(FilledRoundedButtonStyle(background: .white, foreground: .black, borderColor: Color.gray.opacity(0.3)))
+                .buttonStyle(FilledRoundedButtonStyle(
+                    background: .white,
+                    foreground: .black,
+                    borderStyle: AnyShapeStyle(
+                        AngularGradient(
+                            colors: [
+                                Color(red: 66/255, green: 133/255, blue: 244/255), // Google Blue
+                                Color(red: 52/255, green: 168/255, blue: 83/255),  // Google Green
+                                Color(red: 251/255, green: 188/255, blue: 5/255),  // Google Yellow
+                                Color(red: 234/255, green: 67/255, blue: 53/255),  // Google Red
+                                Color(red: 66/255, green: 133/255, blue: 244/255)  // Close the loop
+                            ],
+                            center: .center
+                        )
+                    ),
+                    borderWidth: 3
+                ))
                 .disabled(session.isProcessing)
             }
             .padding(.horizontal)
@@ -50,7 +69,8 @@ struct AuthenticationView: View {
 struct FilledRoundedButtonStyle: ButtonStyle {
     var background: Color
     var foreground: Color
-    var borderColor: Color? = nil
+    var borderStyle: AnyShapeStyle? = nil
+    var borderWidth: CGFloat = 1
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -59,7 +79,7 @@ struct FilledRoundedButtonStyle: ButtonStyle {
             .background(background.opacity(configuration.isPressed ? 0.8 : 1))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(borderColor ?? .clear, lineWidth: 1)
+                    .stroke(borderStyle ?? AnyShapeStyle(.clear), lineWidth: borderWidth)
             )
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .contentShape(Rectangle())
@@ -86,3 +106,4 @@ struct FilledRoundedButtonStyle: ButtonStyle {
         .environmentObject(rewardsVM)
 }
 #endif
+
